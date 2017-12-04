@@ -129,25 +129,29 @@ void __sub_rq_bw(u64 dl_bw, struct dl_rq *dl_rq)
 static inline
 void add_rq_bw(struct sched_dl_entity *dl_se, struct dl_rq *dl_rq)
 {
-	__add_rq_bw(dl_se->dl_bw, dl_rq);
+	if (!dl_entity_is_special(dl_se))
+		__add_rq_bw(dl_se->dl_bw, dl_rq);
 }
 
 static inline
 void sub_rq_bw(struct sched_dl_entity *dl_se, struct dl_rq *dl_rq)
 {
-	__sub_rq_bw(dl_se->dl_bw, dl_rq);
+	if (!dl_entity_is_special(dl_se))
+		__sub_rq_bw(dl_se->dl_bw, dl_rq);
 }
 
 static inline
 void add_running_bw(struct sched_dl_entity *dl_se, struct dl_rq *dl_rq)
 {
-	__add_running_bw(dl_se->dl_bw, dl_rq);
+	if (!dl_entity_is_special(dl_se))
+		__add_running_bw(dl_se->dl_bw, dl_rq);
 }
 
 static inline
 void sub_running_bw(struct sched_dl_entity *dl_se, struct dl_rq *dl_rq)
 {
-	__sub_running_bw(dl_se->dl_bw, dl_rq);
+	if (!dl_entity_is_special(dl_se))
+		__sub_running_bw(dl_se->dl_bw, dl_rq);
 }
 
 void dl_change_utilization(struct task_struct *p, u64 new_bw)
@@ -244,6 +248,9 @@ static void task_non_contending(struct task_struct *p)
 	 * do nothing
 	 */
 	if (dl_se->dl_runtime == 0)
+		return;
+
+	if (dl_entity_is_special(dl_se))
 		return;
 
 	WARN_ON(dl_se->dl_non_contending);
@@ -1173,6 +1180,9 @@ static void update_curr_dl(struct rq *rq)
 
 	curr->se.exec_start = now;
 	cpuacct_charge(curr, delta_exec);
+
+	if (dl_entity_is_special(dl_se))
+		return;
 
 	/*
 	 * For tasks that participate in GRUB, we implement GRUB-PA: the
