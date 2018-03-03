@@ -11,10 +11,7 @@
  *  of the License.
  */
 
-#include <linux/gfp.h>
-#include <linux/kernel.h>
-#include <linux/slab.h>
-#include "cpudeadline.h"
+#include "sched.h"
 
 static inline int parent(int i)
 {

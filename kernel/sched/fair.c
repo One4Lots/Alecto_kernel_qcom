@@ -21,23 +21,15 @@
  *  Copyright (C) 2007 Red Hat, Inc., Peter Zijlstra
  */
 
-#include <linux/rbtree_augmented.h>
-#include <linux/sched/mm.h>
-#include <linux/sched/topology.h>
+#include "sched.h"
 
-#include <linux/latencytop.h>
-#include <linux/cpumask.h>
-#include <linux/cpuidle.h>
-#include <linux/slab.h>
-#include <linux/profile.h>
 #include <linux/interrupt.h>
+#include <linux/latencytop.h>
 #include <linux/mempolicy.h>
-#include <linux/migrate.h>
-#include <linux/task_work.h>
+#include <linux/rbtree_augmented.h>
 
 #include <trace/events/sched.h>
 
-#include "sched.h"
 #include "tune.h"
 #include "walt.h"
 

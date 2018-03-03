@@ -10,7 +10,6 @@
  */
 
 #include "sched.h"
-#include <linux/cpufreq.h>
 
 DEFINE_PER_CPU(struct update_util_data *, cpufreq_update_util_data);
 

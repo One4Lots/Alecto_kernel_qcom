@@ -5,43 +5,19 @@
  *
  *  Copyright (C) 1991-2002  Linus Torvalds
  */
-#include <linux/sched.h>
-#include <linux/sched/clock.h>
-#include <uapi/linux/sched/types.h>
-#include <linux/sched/loadavg.h>
-#include <linux/sched/hotplug.h>
-#include <linux/wait_bit.h>
-#include <linux/cpuset.h>
-#include <linux/delayacct.h>
-#include <linux/init_task.h>
-#include <linux/context_tracking.h>
-#include <linux/rcupdate_wait.h>
+#include "sched.h"
 
-#include <linux/blkdev.h>
-#include <linux/kcov.h>
-#include <linux/kprobes.h>
-#include <linux/mmu_context.h>
-#include <linux/module.h>
-#include "pelt.h"
-#include <linux/nmi.h>
-#include <linux/prefetch.h>
-#include <linux/profile.h>
-#include <linux/scs.h>
-#include <linux/security.h>
-#include <linux/syscalls.h>
-#include <linux/irq.h>
 #include <linux/delay.h>
-
-#include <linux/kthread.h>
+#include <linux/irq.h>
+#include <linux/kcov.h>
+#include <linux/module.h>
+#include <linux/scs.h>
+#include <linux/wait_bit.h>
 
 #include <asm/switch_to.h>
 #include <linux/msm_rtb.h>
-#include <asm/tlb.h>
-#ifdef CONFIG_PARAVIRT
-#include <asm/paravirt.h>
-#endif
 
-#include "sched.h"
+#include "pelt.h"
 #include "walt.h"
 #include "../workqueue_internal.h"
 #include "../smpboot.h"
@@ -3453,6 +3429,18 @@ fire_sched_out_preempt_notifiers(struct task_struct *curr,
 }
 
 #endif /* CONFIG_PREEMPT_NOTIFIERS */
+
+/*
+ * NOP if the arch has not defined these:
+ */
+
+#ifndef prepare_arch_switch
+# define prepare_arch_switch(next)	do { } while (0)
+#endif
+
+#ifndef finish_arch_post_lock_switch
+# define finish_arch_post_lock_switch()	do { } while (0)
+#endif
 
 /**
  * prepare_task_switch - prepare to switch tasks

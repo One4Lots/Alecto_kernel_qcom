@@ -5,23 +5,11 @@
  * (NOTE: these are not related to SCHED_IDLE batch scheduled
  *        tasks which are handled in sched/fair.c )
  */
-#include <linux/sched.h>
-#include <linux/sched/idle.h>
-#include <linux/cpu.h>
-#include <linux/cpuidle.h>
-#include <linux/cpuhotplug.h>
-#include <linux/tick.h>
-#include "pelt.h"
-#include <linux/mm.h>
-#include <linux/stackprotector.h>
-#include <linux/suspend.h>
-#include <linux/livepatch.h>
-
-#include <asm/tlb.h>
+#include "sched.h"
 
 #include <trace/events/power.h>
 
-#include "sched.h"
+#include "pelt.h"
 
 /* Linker adds these: start and end of __cpuidle functions */
 extern char __cpuidle_text_start[], __cpuidle_text_end[];

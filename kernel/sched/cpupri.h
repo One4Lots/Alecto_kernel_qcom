@@ -2,8 +2,6 @@
 #ifndef _LINUX_CPUPRI_H
 #define _LINUX_CPUPRI_H
 
-#include <linux/sched.h>
-
 #define CPUPRI_NR_PRIORITIES	(MAX_RT_PRIO + 2)
 
 #define CPUPRI_INVALID -1
