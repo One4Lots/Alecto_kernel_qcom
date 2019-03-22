@@ -19,6 +19,7 @@ generic-y += preempt.h
 generic-y += qrwlock.h
 generic-y += qspinlock.h
 generic-y += rwsem.h
+generic-y += qspinlock.h
 generic-y += segment.h
 generic-y += serial.h
 generic-y += set_memory.h
