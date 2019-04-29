@@ -6153,10 +6153,45 @@ static void tsc_khz_changed(void *data)
 	__this_cpu_write(cpu_tsc_khz, khz);
 }
 
-static int kvmclock_cpufreq_notifier(struct notifier_block *nb, unsigned long val,
-				     void *data)
+#ifdef CONFIG_X86_64
+static void kvm_hyperv_tsc_notifier(void)
 {
-	struct cpufreq_freqs *freq = data;
+	struct kvm *kvm;
+	struct kvm_vcpu *vcpu;
+	int cpu;
+
+	mutex_lock(&kvm_lock);
+	list_for_each_entry(kvm, &vm_list, vm_list)
+		kvm_make_mclock_inprogress_request(kvm);
+
+	hyperv_stop_tsc_emulation();
+
+	/* TSC frequency always matches when on Hyper-V */
+	for_each_present_cpu(cpu)
+		per_cpu(cpu_tsc_khz, cpu) = tsc_khz;
+	kvm_max_guest_tsc_khz = tsc_khz;
+
+	list_for_each_entry(kvm, &vm_list, vm_list) {
+		struct kvm_arch *ka = &kvm->arch;
+
+		spin_lock(&ka->pvclock_gtod_sync_lock);
+
+		pvclock_update_vm_gtod_copy(kvm);
+
+		kvm_for_each_vcpu(cpu, vcpu, kvm)
+			kvm_make_request(KVM_REQ_CLOCK_UPDATE, vcpu);
+
+		kvm_for_each_vcpu(cpu, vcpu, kvm)
+			kvm_clear_request(KVM_REQ_MCLOCK_INPROGRESS, vcpu);
+
+		spin_unlock(&ka->pvclock_gtod_sync_lock);
+	}
+	mutex_unlock(&kvm_lock);
+}
+#endif
+
+static void __kvmclock_cpufreq_notifier(struct cpufreq_freqs *freq, int cpu)
+{
 	struct kvm *kvm;
 	struct kvm_vcpu *vcpu;
 	int i, send_ipi = 0;
@@ -6200,17 +6235,12 @@ static int kvmclock_cpufreq_notifier(struct notifier_block *nb, unsigned long va
 	 *
 	 */
 
-	if (val == CPUFREQ_PRECHANGE && freq->old > freq->new)
-		return 0;
-	if (val == CPUFREQ_POSTCHANGE && freq->old < freq->new)
-		return 0;
-
-	smp_call_function_single(freq->cpu, tsc_khz_changed, freq, 1);
+	smp_call_function_single(cpu, tsc_khz_changed, freq, 1);
 
 	mutex_lock(&kvm_lock);
 	list_for_each_entry(kvm, &vm_list, vm_list) {
 		kvm_for_each_vcpu(i, vcpu, kvm) {
-			if (vcpu->cpu != freq->cpu)
+			if (vcpu->cpu != cpu)
 				continue;
 			kvm_make_request(KVM_REQ_CLOCK_UPDATE, vcpu);
 			if (vcpu->cpu != raw_smp_processor_id())
@@ -6232,8 +6262,24 @@ static int kvmclock_cpufreq_notifier(struct notifier_block *nb, unsigned long va
 		 * guest context is entered kvmclock will be updated,
 		 * so the guest will not see stale values.
 		 */
-		smp_call_function_single(freq->cpu, tsc_khz_changed, freq, 1);
+		smp_call_function_single(cpu, tsc_khz_changed, freq, 1);
 	}
+}
+
+static int kvmclock_cpufreq_notifier(struct notifier_block *nb, unsigned long val,
+				     void *data)
+{
+	struct cpufreq_freqs *freq = data;
+	int cpu;
+
+	if (val == CPUFREQ_PRECHANGE && freq->old > freq->new)
+		return 0;
+	if (val == CPUFREQ_POSTCHANGE && freq->old < freq->new)
+		return 0;
+
+	for_each_cpu(cpu, freq->policy->cpus)
+		__kvmclock_cpufreq_notifier(freq, cpu);
+
 	return 0;
 }
 
