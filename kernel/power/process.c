@@ -142,7 +142,7 @@ int freeze_processes(void)
 		__usermodehelper_set_disable_depth(UMH_DISABLED);
 		pr_debug("done.");
 	}
-	pr_cont("\n");
+	pr_debug("\n");
 	BUG_ON(in_atomic());
 
 	/*
@@ -178,7 +178,7 @@ int freeze_kernel_threads(void)
 	if (!error)
 		pr_debug("done.");
 
-	pr_cont("\n");
+	pr_debug("\n");
 	BUG_ON(in_atomic());
 
 	if (error)
