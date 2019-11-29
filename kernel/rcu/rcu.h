@@ -211,7 +211,6 @@ static inline void debug_rcu_head_unqueue(struct rcu_head *head)
 #endif	/* #else !CONFIG_DEBUG_OBJECTS_RCU_HEAD */
 
 extern int rcu_cpu_stall_suppress_at_boot;
-extern bool rcu_inkernel_boot_has_ended(void);
 extern void kfree_rcu_scheduler_running(void);
 
 static inline bool rcu_stall_is_suppressed_at_boot(void)
