@@ -155,6 +155,23 @@ void __smp_call_single_queue(int cpu, struct llist_node *node)
 		send_call_function_single_ipi(cpu);
 }
 
+void __smp_call_single_queue(int cpu, struct llist_node *node)
+{
+	/*
+	 * The list addition should be visible before sending the IPI
+	 * handler locks the list to pull the entry off it because of
+	 * normal cache coherency rules implied by spinlocks.
+	 *
+	 * If IPIs can go out of order to the cache coherency protocol
+	 * in an architecture, sufficient synchronisation should be added
+	 * to arch code to make it appear to obey cache coherency WRT
+	 * locking and barrier primitives. Generic code isn't really
+	 * equipped to do the right thing...
+	 */
+	if (llist_add(node, &per_cpu(call_single_queue, cpu)))
+		send_call_function_single_ipi(cpu);
+}
+
 /*
  * Insert a previously allocated call_single_data_t element
  * for execution on the given CPU. data must already have
@@ -679,6 +696,17 @@ void __init smp_init(void)
 {
 	int num_nodes, num_cpus;
 	unsigned int cpu;
+
+	/*
+	 * Ensure struct irq_work layout matches so that
+	 * flush_smp_call_function_queue() can do horrible things.
+	 */
+	BUILD_BUG_ON(offsetof(struct irq_work, llnode) !=
+		     offsetof(struct __call_single_data, llist));
+	BUILD_BUG_ON(offsetof(struct irq_work, func) !=
+		     offsetof(struct __call_single_data, func));
+	BUILD_BUG_ON(offsetof(struct irq_work, flags) !=
+		     offsetof(struct __call_single_data, flags));
 
 	idle_threads_init();
 	cpuhp_threads_init();
