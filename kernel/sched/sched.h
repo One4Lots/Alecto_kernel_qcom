@@ -1276,12 +1276,6 @@ struct rq {
 	unsigned int ttwu_local;
 #endif
 
-#ifdef CONFIG_SMP
-#if SCHED_FEAT_TTWU_QUEUE
-	struct llist_head	wake_list;
-#endif
-#endif
-
 #ifdef CONFIG_CPU_IDLE
 	/* Must be inspected within a rcu lock section */
 	struct cpuidle_state *idle_state;

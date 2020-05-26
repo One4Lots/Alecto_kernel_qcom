@@ -225,6 +225,7 @@ void generic_smp_call_function_single_interrupt(void)
 	irq_work_run();
 }
 
+extern void sched_ttwu_pending(void *);
 extern void irq_work_single(void *);
 
 /**
@@ -716,6 +717,13 @@ void __init smp_init(void)
 		     offsetof(struct __call_single_data, func));
 	BUILD_BUG_ON(offsetof(struct irq_work, flags) !=
 		     offsetof(struct __call_single_data, flags));
+
+	/*
+	 * Assert the CSD_TYPE_TTWU layout is similar enough
+	 * for task_struct to be on the @call_single_queue.
+	 */
+	BUILD_BUG_ON(offsetof(struct task_struct, wake_entry_type) - offsetof(struct task_struct, wake_entry) !=
+		     offsetof(struct __call_single_data, flags) - offsetof(struct __call_single_data, llist));
 
 	idle_threads_init();
 	cpuhp_threads_init();
