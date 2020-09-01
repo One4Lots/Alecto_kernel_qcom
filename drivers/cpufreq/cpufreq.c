@@ -440,6 +440,11 @@ void cpufreq_freq_transition_end(struct cpufreq_policy *policy,
 
 	cpufreq_notify_post_transition(policy, freqs, transition_failed);
 
+	arch_set_freq_scale(policy->related_cpus,
+			    policy->cur,
+			    policy->cpuinfo.max_freq);
+
+	spin_lock(&policy->transition_lock);
 	policy->transition_ongoing = false;
 	policy->transition_task = NULL;
 
