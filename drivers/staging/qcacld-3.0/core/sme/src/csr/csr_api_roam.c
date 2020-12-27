@@ -13640,7 +13640,6 @@ static QDF_STATUS csr_roam_start_wait_for_key_timer(
 	tpCsrNeighborRoamControlInfo pNeighborRoamInfo =
 		&mac->roam.neighborRoamInfo[session_id];
 #endif
-
 	if (csr_neighbor_roam_is_handoff_in_progress(mac, session_id)) {
 		/* Disable heartbeat timer when hand-off is in progress */
 #ifdef WLAN_DEBUG
