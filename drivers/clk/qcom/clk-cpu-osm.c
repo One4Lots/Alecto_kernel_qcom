@@ -212,6 +212,27 @@ static const struct clk_ops clk_ops_core = {
 	.recalc_rate = clk_core_recalc_rate,
 };
 
+struct osm_cpufreq_boost {
+	struct clk_osm *c;
+	unsigned int max_index;
+};
+
+static DEFINE_PER_CPU(struct osm_cpufreq_boost, osm_boost_pcpu);
+
+static int cpuhp_osm_online(unsigned int cpu)
+{
+	struct osm_cpufreq_boost *b = &per_cpu(osm_boost_pcpu, cpu);
+	struct clk_osm *c = b->c;
+
+	if (!c)
+		return 0;
+
+	clk_osm_write_reg(c, b->max_index,
+			  DCVS_PERF_STATE_DESIRED_REG(c->core_num));
+	clk_osm_mb(c);
+	return 0;
+}
+
 static int l3_clk_set_rate(struct clk_hw *hw, unsigned long rate,
 				    unsigned long parent_rate)
 {
@@ -735,6 +756,19 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	policy->dvfs_possible_from_any_cpu = true;
 	policy->fast_switch_possible = true;
 	policy->driver_data = c;
+
+	{
+		unsigned int cpu, max_idx = 0;
+		struct cpufreq_frequency_table *pos;
+
+		cpufreq_for_each_valid_entry(pos, policy->freq_table)
+			max_idx = pos - policy->freq_table;
+
+		for_each_cpu(cpu, policy->cpus) {
+			per_cpu(osm_boost_pcpu, cpu).c = c;
+			per_cpu(osm_boost_pcpu, cpu).max_index = max_idx;
+		}
+	}
 
 	cpumask_copy(policy->cpus, &c->related_cpus);
 
@@ -1287,6 +1321,12 @@ static int clk_cpu_osm_driver_probe(struct platform_device *pdev)
 	rc = cpufreq_register_driver(&qcom_osm_cpufreq_driver);
 	if (rc)
 		goto provider_err;
+
+	rc = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE, "osm-cpufreq:online",
+				       cpuhp_osm_online, NULL);
+	if (rc)
+		dev_err(&pdev->dev, "CPUHP callback setup failed, rc=%d\n", rc);
+	rc = 0;
 
 	pr_info("OSM CPUFreq driver inited\n");
 	return 0;
