@@ -5014,6 +5014,8 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 static void
 set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, bool first)
 {
+	clear_buddies(cfs_rq, se);
+
 	/* 'current' is not kept within the tree. */
 	if (se->on_rq) {
 		/*
@@ -5021,16 +5023,16 @@ set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, bool first)
 		 * a CPU. So account for the time it spent waiting on the
 		 * runqueue.
 		 */
-		clear_buddies(cfs_rq, se);
 		update_stats_wait_end(cfs_rq, se);
 		__dequeue_entity(cfs_rq, se);
-		update_load_avg(cfs_rq_of(se), se, UPDATE_TG);
+		update_load_avg(cfs_rq, se, UPDATE_TG);
 
 		if (first)
 			set_protect_slice(cfs_rq, se);
 	}
 
 	update_stats_curr_start(cfs_rq, se);
+	SCHED_WARN_ON(cfs_rq->curr);
 	cfs_rq->curr = se;
 
 	/*
@@ -5038,7 +5040,8 @@ set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, bool first)
 	 * least twice that of our own weight (i.e. dont track it
 	 * when there are only lesser-weight tasks around):
 	 */
-	if (schedstat_enabled() && rq_of(cfs_rq)->load.weight >= 2*se->load.weight) {
+	if (schedstat_enabled() &&
+	    rq_of(cfs_rq)->cfs.load.weight >= 2*se->load.weight) {
 		schedstat_set(se->statistics.slice_max,
 			max((u64)schedstat_val(se->statistics.slice_max),
 			    se->sum_exec_runtime - se->prev_sum_exec_runtime));
@@ -6403,45 +6406,6 @@ static unsigned long cpu_runnable(struct rq *rq)
 	return cfs_rq_runnable_avg(&rq->cfs);
 }
 
-/* Used instead of source_load when we know the type == 0 */
-static unsigned long weighted_cpuload(struct rq *rq)
-{
-	return cfs_rq_runnable_avg(&rq->cfs);
-}
-
-/*
- * Return a low guess at the load of a migration-source cpu weighted
- * according to the scheduling class and "nice" value.
- *
- * We want to under-estimate the load of migration sources, to
- * balance conservatively.
- */
-static unsigned long source_load(int cpu, int type)
-{
-	struct rq *rq = cpu_rq(cpu);
-	unsigned long total = weighted_cpuload(rq);
-
-	if (type == 0 || !sched_feat(LB_BIAS))
-		return total;
-
-	return min(rq->cpu_load[type-1], total);
-}
-
-/*
- * Return a high guess at the load of a migration-target cpu weighted
- * according to the scheduling class and "nice" value.
- */
-static unsigned long target_load(int cpu, int type)
-{
-	struct rq *rq = cpu_rq(cpu);
-	unsigned long total = weighted_cpuload(rq);
-
-	if (type == 0 || !sched_feat(LB_BIAS))
-		return total;
-
-	return max(rq->cpu_load[type-1], total);
-}
-
 #ifndef CONFIG_SCHED_CASS
 static void record_wakee(struct task_struct *p)
 {
@@ -7490,7 +7454,7 @@ static unsigned long capacity_spare_without(int cpu, struct task_struct *p)
 {
 	return max_t(long, capacity_of(cpu) - cpu_util_without(cpu, p), 0);
 }
-
+#ifndef CONFIG_SCHED_CASS
 /*
  * find_idlest_group finds and returns the least busy CPU group within the
  * domain.
@@ -7731,7 +7695,7 @@ static inline int find_idlest_cpu(struct sched_domain *sd, struct task_struct *p
 
 	return new_cpu;
 }
-
+#endif
 #ifdef CONFIG_SCHED_SMT
 DEFINE_STATIC_KEY_FALSE(sched_smt_present);
 EXPORT_SYMBOL_GPL(sched_smt_present);
@@ -11520,8 +11484,7 @@ static int should_we_balance(struct lb_env *env)
 	 * to optimize wakeup latency.
 	 */
 	if (env->idle == CPU_NEWLY_IDLE) {
-		if (env->dst_rq->nr_running > 0 ||
-		    !llist_empty(&env->dst_rq->wake_list))
+		if (env->dst_rq->nr_running > 0 || env->dst_rq->ttwu_pending)
 			return 0;
 		return 1;
 	}
@@ -12778,7 +12741,7 @@ static int newidle_balance(struct rq *this_rq, struct rq_flags *rf)
 	 * There is a task waiting to run. No need to search for one.
 	 * Return 0; the task will be enqueued when switching to idle.
 	 */
-	if (!llist_empty(&this_rq->wake_list))
+	if (this_rq->ttwu_pending)
 		return 0;
 
 	/*

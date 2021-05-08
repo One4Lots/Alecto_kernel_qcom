@@ -282,7 +282,7 @@ static void do_idle(void)
 	 */
 	smp_mb__after_atomic();
 
-	sched_ttwu_pending();
+	flush_smp_call_function_from_idle();
 	schedule_idle();
 
 	if (unlikely(klp_patch_pending(current)))
