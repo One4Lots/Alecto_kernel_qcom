@@ -40,6 +40,9 @@
 #define AWAKE_BIT BIT(PROC_AWAKE_ID)
 extern struct qcom_smem_state *smem_state;
 
+#undef trace_suspend_resume
+#define trace_suspend_resume(x, ...)
+
 const char * const pm_labels[] = {
 	[PM_SUSPEND_TO_IDLE] = "freeze",
 	[PM_SUSPEND_STANDBY] = "standby",
@@ -579,9 +582,7 @@ static int enter_state(suspend_state_t state)
 
 #ifndef CONFIG_SUSPEND_SKIP_SYNC
 	trace_suspend_resume(TPS("sync_filesystems"), 0, true);
-	pr_debug("Syncing filesystems ... ");
 	sys_sync();
-	pr_debug("done.\n");
 	trace_suspend_resume(TPS("sync_filesystems"), 0, false);
 #endif
 
@@ -595,14 +596,12 @@ static int enter_state(suspend_state_t state)
 		goto Finish;
 
 	trace_suspend_resume(TPS("suspend_enter"), state, false);
-	pm_pr_dbg("Suspending system (%s)\n", mem_sleep_labels[state]);
 	pm_restrict_gfp_mask();
 	error = suspend_devices_and_enter(state);
 	pm_restore_gfp_mask();
 
  Finish:
 	events_check_enabled = false;
-	pm_pr_dbg("Finishing wakeup.\n");
 	suspend_finish();
  Unlock:
 	mutex_unlock(&pm_mutex);
@@ -636,7 +635,6 @@ int pm_suspend(suspend_state_t state)
 		return -EINVAL;
 
 	pm_suspend_marker("entry");
-	pr_debug("suspend entry (%s)\n", mem_sleep_labels[state]);
 	qcom_smem_state_update_bits(smem_state, AWAKE_BIT, 0);
 	error = enter_state(state);
 	qcom_smem_state_update_bits(smem_state, AWAKE_BIT, AWAKE_BIT);
@@ -647,7 +645,6 @@ int pm_suspend(suspend_state_t state)
 		suspend_stats.success++;
 	}
 	pm_suspend_marker("exit");
-	pr_debug("suspend exit\n");
 	measure_wake_up_time();
 	return error;
 }
