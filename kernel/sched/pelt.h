@@ -1,7 +1,15 @@
 #ifdef CONFIG_SMP
 #include "sched-pelt.h"
 
-#define UTIL_AVG_UNCHANGED 0x1
+/*
+ * The UTIL_AVG_UNCHANGED flag is used to synchronize util_est with util_avg
+ * updates. When a task is dequeued, its util_est should not be updated if its
+ * util_avg has not been updated in the meantime.
+ * This information is mapped into the MSB bit of util_est.enqueued at dequeue
+ * time. Since max value of util_est.enqueued for a task is 1024 (PELT util_avg
+ * for a task) it is safe to use MSB.
+ */
+#define UTIL_AVG_UNCHANGED	0x80000000
 #define cap_scale(v, s) ((v)*(s) >> SCHED_CAPACITY_SHIFT)
 
 int __update_load_avg_blocked_se(u64 now, int cpu, struct sched_entity *se);
