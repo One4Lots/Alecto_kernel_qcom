@@ -91,3 +91,5 @@ obj-y += asoc/
 else
 obj-y += 4.0/
 endif
+
+subdir-ccflags-y := -Os
