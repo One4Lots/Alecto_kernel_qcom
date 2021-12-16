@@ -80,7 +80,7 @@ static void wakeup_softirqd(void)
 	/* Interrupts are disabled: no need to stop preemption */
 	struct task_struct *tsk = __this_cpu_read(ksoftirqd);
 
-	if (tsk)
+	if (tsk && tsk->state != TASK_RUNNING)
 		wake_up_process(tsk);
 }
 
@@ -135,13 +135,9 @@ static void __local_bh_enable(unsigned int cnt)
 {
 	WARN_ON_ONCE(!irqs_disabled());
 
-	if (preempt_count() == cnt)
-		trace_preempt_on(CALLER_ADDR0, get_lock_parent_ip());
-
 	if (softirq_count() == (cnt & SOFTIRQ_MASK))
 		trace_softirqs_on(_RET_IP_);
-
-	__preempt_count_sub(cnt);
+	preempt_count_sub(cnt);
 }
 
 /*
@@ -306,7 +302,6 @@ restart:
 	}
 
 	__this_cpu_write(active_softirqs, 0);
-	rcu_bh_qs();
 	if (__this_cpu_read(ksoftirqd) == current)
 		rcu_softirq_qs();
 	local_irq_disable();
