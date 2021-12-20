@@ -484,6 +484,10 @@ struct kgsl_process_private {
 	int fd_count;
 	atomic_t ctxt_count;
 	spinlock_t ctxt_count_lock;
+	/**
+	 * @private_mutex: Mutex lock to protect kgsl_process_private
+	 */
+	struct mutex private_mutex;
 };
 
 /**
