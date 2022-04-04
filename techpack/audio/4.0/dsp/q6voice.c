@@ -3,6 +3,10 @@
  * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
+
+#undef pr_info
+#undef pr_debug
+
 #include <linux/slab.h>
 #include <linux/kthread.h>
 #include <linux/kernel.h>
