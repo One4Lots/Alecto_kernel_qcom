@@ -946,7 +946,6 @@ bool pm_wakeup_pending(void)
 	if (ret) {
 		pm_get_active_wakeup_sources(suspend_abort,
 					     MAX_SUSPEND_ABORT_LEN);
-		log_suspend_abort_reason(suspend_abort);
 		pr_debug("PM: %s\n", suspend_abort);
 	}
 
@@ -985,7 +984,7 @@ void pm_system_irq_wakeup(unsigned int irq_number)
 			else if (desc->action && desc->action->name)
 				name = desc->action->name;
 
-			pr_warn("%s: %d triggered %s\n", __func__,
+			pr_debug("%s: %d triggered %s\n", __func__,
 					irq_number, name);
 
 		}
