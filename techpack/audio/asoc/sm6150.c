@@ -11,6 +11,8 @@
  * GNU General Public License for more details.
  */
 
+#define sm_info pr_debug
+
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/gpio.h>
@@ -4776,7 +4778,7 @@ static int msm_audrx_tavil_init(struct snd_soc_pcm_runtime *rtd)
 					      134, 135, 136, 137, 138, 139,
 					      140, 141, 142, 143};
 
-	pr_info("%s: dev_name:%s\n", __func__, dev_name(cpu_dai->dev));
+	sm_info("%s: dev_name:%s\n", __func__, dev_name(cpu_dai->dev));
 
 	rtd->pmdown_time = 0;
 
@@ -4918,7 +4920,7 @@ static int msm_audrx_tasha_init(struct snd_soc_pcm_runtime *rtd)
 					     134, 135, 136, 137, 138, 139,
 					     140, 141, 142, 143};
 
-	pr_info("%s: dev_name:%s\n", __func__, dev_name(cpu_dai->dev));
+	sm_info("%s: dev_name:%s\n", __func__, dev_name(cpu_dai->dev));
 
 	rtd->pmdown_time = 0;
 
