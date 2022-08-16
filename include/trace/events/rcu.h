@@ -805,7 +805,6 @@ TRACE_EVENT(rcu_barrier,
 	while (0)
 #define trace_rcu_fqs(rcuname, gp_seq, cpu, qsevent) do { } while (0)
 #define trace_rcu_dyntick(polarity, oldnesting, newnesting, dyntick) do { } while (0)
-#define trace_rcu_prep_idle(reason) do { } while (0)
 #define trace_rcu_callback(rcuname, rhp, qlen) do { } while (0)
 #define trace_rcu_kvfree_callback(rcuname, rhp, offset, qlen) \
 	do { } while (0)
@@ -825,3 +824,4 @@ TRACE_EVENT(rcu_barrier,
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>
+
