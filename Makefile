@@ -756,15 +756,16 @@ KBUILD_CFLAGS   += -Os
 else
 KBUILD_CFLAGS   += -O3
 ifeq ($(cc-name),gcc)
-KBUILD_CFLAGS	+= -march=armv8.2-a+crypto+fp16+dotprod+rcpc
-KBUILD_CFLAGS	+= -mtune=cortex-a76.cortex-a55
+KBUILD_CFLAGS   += -march=armv8.2-a+crypto+fp16+dotprod+rcpc
+KBUILD_CFLAGS   += -mtune=cortex-a76.cortex-a55
 endif
 ifeq ($(cc-name),clang)
-KBUILD_CFLAGS	+= -march=armv8.2-a+crypto+fp16+dotprod+rcpc
-KBUILD_CFLAGS	+= -mtune=cortex-a76
-# Enable hot cold split optimization
+# CPU architecture, tuning, and extensions for Snapdragon 720G (Cortex-A76 / A55)
+KBUILD_CFLAGS   += -mcpu=cortex-a76+crc+crypto -mtune=cortex-a76 -march=armv8.2-a+crc+crypto+lse+rdm+rcpc+dotprod+fp16
+KBUILD_AFLAGS   += -mcpu=cortex-a76+crc+crypto -mtune=cortex-a76 -march=armv8.2-a+crc+crypto+lse+rdm+rcpc+dotprod+fp16
+KBUILD_CFLAGS   += -funroll-loops
+# Advanced LLVM optimizations supported by Android Clang
 KBUILD_CFLAGS   += -mllvm -hot-cold-split=true
-# Enable MLGO optimizations for register allocation
 KBUILD_CFLAGS   += -mllvm -regalloc-enable-advisor=release
 KBUILD_LDFLAGS  += -mllvm -regalloc-enable-advisor=release
 KBUILD_LDFLAGS  += -mllvm -enable-ml-inliner=release
@@ -845,6 +846,8 @@ KBUILD_CFLAGS += $(call cc-option, -Wno-undefined-optimized)
 KBUILD_CFLAGS += $(call cc-option, -Wno-tautological-constant-out-of-range-compare)
 KBUILD_CFLAGS += $(call cc-option, -mllvm -disable-struct-const-merge)
 KBUILD_CFLAGS += $(call cc-option, -Wno-sometimes-uninitialized)
+KBUILD_CFLAGS += $(call cc-option, -Wno-pointer-to-int-cast)
+KBUILD_CFLAGS += $(call cc-option, -Wno-void-pointer-to-int-cast)
 
 # Quiet clang warning: comparison of unsigned expression < 0 is always false
 
@@ -864,7 +867,7 @@ KBUILD_CFLAGS += $(call cc-option,-fno-delete-null-pointer-checks,)
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-but-set-variable)
 
 ifeq ($(ld-name),lld)
-LDFLAGS += -O2
+LDFLAGS += --lto-O3
 endif
 
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
