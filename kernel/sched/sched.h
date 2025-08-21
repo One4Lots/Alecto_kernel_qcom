@@ -297,14 +297,56 @@ static inline int task_has_dl_policy(struct task_struct *p)
 	return dl_policy(p->policy);
 }
 
+#define cap_scale(v, s) ((v)*(s) >> SCHED_CAPACITY_SHIFT)
+
+static inline void update_avg(u64 *avg, u64 sample)
+{
+	s64 diff = sample - *avg;
+	*avg += diff / 8;
+}
+
+/*
+ * Shifting a value by an exponent greater *or equal* to the size of said value
+ * is UB; cap at size-1.
+ */
+#define shr_bound(val, shift)							\
+	(val >> min_t(typeof(shift), shift, BITS_PER_TYPE(typeof(val)) - 1))
+
+/*
+ * !! For sched_setattr_nocheck() (kernel) only !!
+ *
+ * This is actually gross. :(
+ *
+ * It is used to make schedutil kworker(s) higher priority than SCHED_DEADLINE
+ * tasks, but still be able to sleep. We need this on platforms that cannot
+ * atomically change clock frequency. Remove once fast switching will be
+ * available on such platforms.
+ *
+ * SUGOV stands for SchedUtil GOVernor.
+ */
+#define SCHED_FLAG_SUGOV	0x10000000
+
+#define SCHED_DL_FLAGS (SCHED_FLAG_RECLAIM | SCHED_FLAG_DL_OVERRUN | SCHED_FLAG_SUGOV)
+
+static inline bool dl_entity_is_special(struct sched_dl_entity *dl_se)
+{
+#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL
+	return unlikely(dl_se->flags & SCHED_FLAG_SUGOV);
+#else
+	return false;
+#endif
+}
+
 /*
  * Tells if entity @a should preempt entity @b.
  */
 static inline bool
 dl_entity_preempt(struct sched_dl_entity *a, struct sched_dl_entity *b)
 {
-	return dl_time_before(a->deadline, b->deadline);
+	return dl_entity_is_special(a) ||
+	       dl_time_before(a->deadline, b->deadline);
 }
+
 
 /*
  * This is the priority-queue data structure of the RT scheduling class:
@@ -2444,8 +2486,6 @@ cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
 
 #endif /* CONFIG_SCHED_WALT */
 
-extern unsigned long
-boosted_cpu_util(int cpu, struct sched_walt_cpu_load *walt_load);
 extern unsigned int capacity_margin_freq;
 
 static inline unsigned long
