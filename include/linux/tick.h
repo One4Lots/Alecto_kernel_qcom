@@ -160,7 +160,7 @@ extern bool tick_nohz_full_running;
 extern cpumask_var_t tick_nohz_full_mask;
 extern cpumask_var_t housekeeping_mask;
 
-static inline bool tick_nohz_full_enabled(void)
+static __always_inline bool tick_nohz_full_enabled(void)
 {
 	if (!context_tracking_is_enabled())
 		return false;
@@ -316,7 +316,7 @@ static inline void housekeeping_affine(struct task_struct *t)
 #endif
 }
 
-static inline void tick_nohz_task_switch(void)
+static __always_inline void tick_nohz_task_switch(void)
 {
 	if (tick_nohz_full_enabled())
 		__tick_nohz_task_switch();

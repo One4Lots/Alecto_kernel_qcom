@@ -1,6 +1,8 @@
 #ifdef CONFIG_SMP
 #include "sched-pelt.h"
 
+struct rt_rq;
+
 /*
  * The UTIL_AVG_UNCHANGED flag is used to synchronize util_est with util_avg
  * updates. When a task is dequeued, its util_est should not be updated if its
