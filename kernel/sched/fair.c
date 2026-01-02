@@ -3143,12 +3143,6 @@ ___update_load_avg(u64 now, int cpu, struct sched_avg *sa,
 
 	if (cfs_rq)
 		trace_sched_load_cfs_rq(cfs_rq);
-	else {
-		if (likely(!rt_rq))
-			trace_sched_load_se(container_of(sa, struct sched_entity, avg));
-		else
-			trace_sched_load_rt_rq(cpu, rt_rq);
-	}
 
 	return 1;
 }
