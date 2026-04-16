@@ -23,18 +23,18 @@
  * tunables
  */
 /* max queue in one round of service */
-static const int cfq_quantum = 32;
-static const u64 cfq_fifo_expire[2] = { NSEC_PER_SEC / 4, NSEC_PER_SEC / 8 };
+static const int cfq_quantum = 12;
+static const u64 cfq_fifo_expire[2] = { NSEC_PER_SEC / 8, NSEC_PER_SEC / 16 };
 /* maximum backwards seek, in KiB */
-static const int cfq_back_max = 32 * 1024;
+static const int cfq_back_max = 0;
 /* penalty of a backwards seek */
-static const int cfq_back_penalty = 1;
+static const int cfq_back_penalty = 0;
 static const u64 cfq_slice_sync = NSEC_PER_SEC / 10;
 static u64 cfq_slice_async = NSEC_PER_SEC / 25;
 static const int cfq_slice_async_rq = 2;
 static u64 cfq_slice_idle = 0;
 static u64 cfq_group_idle = 0;
-static const u64 cfq_target_latency = (u64)NSEC_PER_SEC * 1/10; /* 100 ms */
+static const u64 cfq_target_latency = (u64)NSEC_PER_SEC * 2/10; /* 200 ms */
 static const int cfq_hist_divisor = 4;
 
 /*
@@ -705,14 +705,16 @@ static inline void cfqg_stats_update_io_merged(struct cfq_group *cfqg,
 }
 
 static inline void cfqg_stats_update_completion(struct cfq_group *cfqg,
-			u64 start_time_ns, u64 io_start_time_ns,
-			unsigned int op)
+						u64 start_time_ns,
+						u64 io_start_time_ns,
+						unsigned int op)
 {
 	struct cfqg_stats *stats = &cfqg->stats;
 	u64 now = ktime_get_ns();
 
 	if (now > io_start_time_ns)
-		blkg_rwstat_add(&stats->service_time, op, now - io_start_time_ns);
+		blkg_rwstat_add(&stats->service_time, op,
+				now - io_start_time_ns);
 	if (io_start_time_ns > start_time_ns)
 		blkg_rwstat_add(&stats->wait_time, op,
 				io_start_time_ns - start_time_ns);
@@ -785,13 +787,7 @@ static inline bool cfqg_is_descendant(struct cfq_group *cfqg,
 static inline void cfqg_get(struct cfq_group *cfqg) { }
 static inline void cfqg_put(struct cfq_group *cfqg) { }
 
-#define cfq_log_cfqq(cfqd, cfqq, fmt, args...)	\
-	if (likely(!blk_trace_note_message_enabled((cfqd)->queue)))	\
-		break;							\
-	blk_add_trace_msg((cfqd)->queue, "cfq%d%c%c " fmt, (cfqq)->pid,	\
-			cfq_cfqq_sync((cfqq)) ? 'S' : 'A',		\
-			cfqq_type((cfqq)) == SYNC_NOIDLE_WORKLOAD ? 'N' : ' ',\
-				##args)
+#define cfq_log_cfqq(cfqd, cfqq, fmt, args...)		do {} while (0)
 #define cfq_log_cfqg(cfqd, cfqg, fmt, args...)		do {} while (0)
 
 static inline void cfqg_stats_update_io_add(struct cfq_group *cfqg,
@@ -803,8 +799,9 @@ static inline void cfqg_stats_update_io_remove(struct cfq_group *cfqg,
 static inline void cfqg_stats_update_io_merged(struct cfq_group *cfqg,
 			unsigned int op) { }
 static inline void cfqg_stats_update_completion(struct cfq_group *cfqg,
-			u64 start_time_ns, u64 io_start_time_ns,
-			unsigned int op) { }
+						u64 start_time_ns,
+						u64 io_start_time_ns,
+						unsigned int op) { }
 
 #endif	/* CONFIG_CFQ_GROUP_IOSCHED */
 
@@ -819,8 +816,7 @@ static inline u64 get_group_idle(struct cfq_data *cfqd)
 	return cfqd->cfq_group_idle;
 }
 
-#define cfq_log(cfqd, fmt, args...)	\
-	blk_add_trace_msg((cfqd)->queue, "cfq " fmt, ##args)
+#define cfq_log(cfqd, fmt, args...)		do {} while (0)
 
 /* Traverses through cfq group service trees */
 #define for_each_cfqg_st(cfqg, i, j, st) \
@@ -3280,8 +3276,12 @@ static struct cfq_group *cfq_get_next_cfqg(struct cfq_data *cfqd)
 
 static void cfq_choose_cfqg(struct cfq_data *cfqd)
 {
-	struct cfq_group *cfqg = cfq_get_next_cfqg(cfqd);
+	struct cfq_group *cfqg;
 	u64 now = ktime_get_ns();
+
+	cfqg = cfq_get_next_cfqg(cfqd);
+	if (unlikely(!cfqg))
+		return;
 
 	cfqd->serving_group = cfqg;
 
@@ -3848,6 +3848,7 @@ static void check_blkcg_changed(struct cfq_io_cq *cic, struct bio *bio)
 	if (cfqq) {
 		cfq_log_cfqq(cfqd, cfqq, "changed cgroup");
 		cic_set_cfqq(cic, NULL, true);
+		cfq_put_cooperator(cfqq);
 		cfq_put_queue(cfqq);
 	}
 
@@ -4299,8 +4300,8 @@ static void cfq_completed_request(struct request_queue *q, struct request *rq)
 	cfqd->rq_in_driver--;
 	cfqq->dispatched--;
 	(RQ_CFQG(rq))->dispatched--;
-	cfqg_stats_update_completion(cfqq->cfqg, rq_start_time_ns(rq),
-				     rq_io_start_time_ns(rq), rq->cmd_flags);
+	cfqg_stats_update_completion(cfqq->cfqg, rq->start_time_ns,
+				     rq->io_start_time_ns, rq->cmd_flags);
 
 	cfqd->rq_in_flight[cfq_cfqq_sync(cfqq)]--;
 
@@ -4316,16 +4317,7 @@ static void cfq_completed_request(struct request_queue *q, struct request *rq)
 					cfqq_type(cfqq));
 
 		st->ttime.last_end_request = now;
-		/*
-		 * We have to do this check in jiffies since start_time is in
-		 * jiffies and it is not trivial to convert to ns. If
-		 * cfq_fifo_expire[1] ever comes close to 1 jiffie, this test
-		 * will become problematic but so far we are fine (the default
-		 * is 128 ms).
-		 */
-		if (!time_after(rq->start_time +
-				  nsecs_to_jiffies(cfqd->cfq_fifo_expire[1]),
-				jiffies))
+		if (rq->start_time_ns + cfqd->cfq_fifo_expire[1] <= now)
 			cfqd->last_delayed_sync = now;
 	}
 
@@ -4836,8 +4828,6 @@ STORE_FUNCTION(cfq_fifo_expire_async_store, &cfqd->cfq_fifo_expire[0], 1,
 STORE_FUNCTION(cfq_back_seek_max_store, &cfqd->cfq_back_max, 0, UINT_MAX, 0);
 STORE_FUNCTION(cfq_back_seek_penalty_store, &cfqd->cfq_back_penalty, 1,
 		UINT_MAX, 0);
-STORE_FUNCTION(cfq_slice_idle_store, &cfqd->cfq_slice_idle, 0, UINT_MAX, 1);
-STORE_FUNCTION(cfq_group_idle_store, &cfqd->cfq_group_idle, 0, UINT_MAX, 1);
 STORE_FUNCTION(cfq_slice_sync_store, &cfqd->cfq_slice[1], 1, UINT_MAX, 1);
 STORE_FUNCTION(cfq_slice_async_store, &cfqd->cfq_slice[0], 1, UINT_MAX, 1);
 STORE_FUNCTION(cfq_slice_async_rq_store, &cfqd->cfq_slice_async_rq, 1,
@@ -4860,15 +4850,16 @@ static ssize_t __FUNC(struct elevator_queue *e, const char *page, size_t count)	
 	*(__PTR) = (u64)__data * NSEC_PER_USEC;				\
 	return count;							\
 }
-USEC_STORE_FUNCTION(cfq_slice_idle_us_store, &cfqd->cfq_slice_idle, 0, UINT_MAX);
-USEC_STORE_FUNCTION(cfq_group_idle_us_store, &cfqd->cfq_group_idle, 0, UINT_MAX);
 USEC_STORE_FUNCTION(cfq_slice_sync_us_store, &cfqd->cfq_slice[1], 1, UINT_MAX);
 USEC_STORE_FUNCTION(cfq_slice_async_us_store, &cfqd->cfq_slice[0], 1, UINT_MAX);
 USEC_STORE_FUNCTION(cfq_target_latency_us_store, &cfqd->cfq_target_latency, 1, UINT_MAX);
 #undef USEC_STORE_FUNCTION
 
 #define CFQ_ATTR(name) \
-	__ATTR(name, S_IRUGO|S_IWUSR, cfq_##name##_show, cfq_##name##_store)
+	__ATTR(name, 0644, cfq_##name##_show, cfq_##name##_store)
+
+#define CFQ_ATTR_RO(name) \
+        __ATTR(name, 0444, cfq_##name##_show, NULL)
 
 #define CFQ_RO_ATTR(name) \
 	__ATTR(name, S_IRUGO, cfq_##name##_show, cfq_##name##_store)
@@ -4884,10 +4875,10 @@ static struct elv_fs_entry cfq_attrs[] = {
 	CFQ_ATTR(slice_async),
 	CFQ_ATTR(slice_async_us),
 	CFQ_ATTR(slice_async_rq),
-	CFQ_ATTR(slice_idle),
-	CFQ_ATTR(slice_idle_us),
-	CFQ_RO_ATTR(group_idle),
-	CFQ_ATTR(group_idle_us),
+	CFQ_ATTR_RO(slice_idle),
+	CFQ_ATTR_RO(slice_idle_us),
+	CFQ_ATTR_RO(group_idle),
+	CFQ_ATTR_RO(group_idle_us),
 	CFQ_ATTR(low_latency),
 	CFQ_ATTR(target_latency),
 	CFQ_ATTR(target_latency_us),
