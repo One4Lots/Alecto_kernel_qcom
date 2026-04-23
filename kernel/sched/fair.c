@@ -698,6 +698,7 @@ static s64 entity_lag(struct cfs_rq *cfs_rq, struct sched_entity *se,
 	return clamp(lag, -limit, limit);
 }
 
+static __always_inline
 bool update_entity_lag(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 	s64 vlag = entity_lag(cfs_rq, se, avg_vruntime(cfs_rq));
