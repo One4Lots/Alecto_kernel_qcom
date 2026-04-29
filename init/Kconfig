@@ -1201,6 +1201,15 @@ config SCHED_TUNE
 
 	  If unsure, say N.
 
+config SCHED_TUNE_DUMMY
+        bool "Dummy SCHEDTUNE nodes"
+        depends on SMP
+        depends on !SCHED_TUNE
+        default y
+        help
+          Create dummy SCHEDTUNE cgroup nodes to satisfy vendor ROM
+          compatibility without actually applying any boost.
+
 config CPUSET_ASSIST
 	bool "Cpuset configuration helper"
 	depends on CPUSETS
