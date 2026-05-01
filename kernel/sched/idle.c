@@ -7,6 +7,7 @@
 #include <linux/cpuidle.h>
 #include <linux/cpuhotplug.h>
 #include <linux/tick.h>
+#include "pelt.h"
 #include <linux/mm.h>
 #include <linux/stackprotector.h>
 #include <linux/suspend.h>

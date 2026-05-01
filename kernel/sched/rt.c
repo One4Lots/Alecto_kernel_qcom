@@ -5,7 +5,7 @@
  */
 
 #include "sched.h"
-
+#include "pelt.h"
 #include <linux/interrupt.h>
 #include <linux/slab.h>
 #include <linux/irq_work.h>

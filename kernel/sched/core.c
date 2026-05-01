@@ -22,6 +22,7 @@
 #include <linux/kprobes.h>
 #include <linux/mmu_context.h>
 #include <linux/module.h>
+#include "pelt.h"
 #include <linux/nmi.h>
 #include <linux/prefetch.h>
 #include <linux/profile.h>
