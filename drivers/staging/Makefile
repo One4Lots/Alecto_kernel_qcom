@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
 # Makefile for staging directory
-
+ifeq ($(CONFIG_LTO_CLANG),y)
+  subdir-ccflags-y += -fno-lto
+endif
+subdir-ccflags-y += -Wno-error=frame-larger-than
 obj-y				+= media/
 obj-y				+= typec/
 obj-$(CONFIG_IRDA)		+= irda/net/
