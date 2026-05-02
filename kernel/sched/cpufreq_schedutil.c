@@ -266,22 +266,23 @@ static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
 	unsigned long cfs_max;
-	unsigned long min_util, max_util;
 	struct sugov_cpu *loadcpu = &per_cpu(sugov_cpu, cpu);
 
 	cfs_max = arch_scale_cpu_capacity(NULL, cpu);
+	*max = cfs_max;
 
 	*util = min(rq->cfs.avg.util_avg, cfs_max);
-	*util = boosted_cpu_util(cpu, &loadcpu->walt_load);	
-	*util = apply_dvfs_headroom(*util, cpu);
 
-	*util = clamp(*util, min_util, max_util);
-	
-	*max = cfs_max;
+#ifdef CONFIG_SCHED_WALT
+	if (likely(sysctl_sched_use_walt_cpu_util))
+		*util = boosted_cpu_util(cpu, &loadcpu->walt_load);
+#endif
 
 #ifdef CONFIG_UCLAMP_TASK
 	*util = uclamp_util_with(rq, *util, NULL);
 #endif
+	*util = apply_dvfs_headroom(*util, cpu);
+	*util = min(*util, cfs_max);
 }
 
 static void sugov_set_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
