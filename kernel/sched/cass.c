@@ -45,9 +45,11 @@ static inline unsigned long arch_scale_min_freq_capacity(int cpu)
 
 static inline bool choose_idle_cpu(int cpu, struct task_struct *p)
 {
-    if (idle_cpu(cpu))
-        return true;
-    return false;
+    if (!idle_cpu(cpu))
+        return false;
+    if (vcpu_is_preempted(cpu))
+        return false;
+    return true;
 }
 
 
