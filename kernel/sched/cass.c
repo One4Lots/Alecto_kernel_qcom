@@ -2,27 +2,8 @@
 /*
  * Copyright (C) 2023-2025 Sultan Alsawaf <sultan@kerneltoast.com>.
  */
-/**
- * DOC: Capacity Aware Superset Scheduler (CASS) description
- *
- * The Capacity Aware Superset Scheduler (CASS) optimizes runqueue selection of
- * CFS tasks. By using CPU capacity as a basis for comparing the relative
- * utilization between different CPUs, CASS fairly balances load across CPUs of
- * varying capacities. This results in improved multi-core performance,
- * especially when CPUs are overutilized because CASS doesn't clip a CPU's
- * utilization when it eclipses the CPU's capacity.
- *
- * As a superset of capacity aware scheduling, CASS implements a hierarchy of
- * criteria to determine the better CPU to wake a task upon between CPUs that
- * have the same relative utilization. This way, single-core performance,
- * latency, and cache affinity are all optimized where possible.
- *
- * CASS doesn't feature explicit energy awareness but its basic load balancing
- * principle results in decreased overall energy, often better than what is
- * possible with explicit energy awareness. By fairly balancing load based on
- * relative utilization, all CPUs are kept at their lowest P-state necessary to
- * satisfy the overall load at any given moment.
- */
+
+
 #ifndef _CASS_4_14_COMPAT
 #define _CASS_4_14_COMPAT
 
@@ -72,11 +53,27 @@ static inline bool choose_idle_cpu(int cpu, struct task_struct *p)
 
 #endif /* _CASS_4_14_COMPAT */
 
-#ifdef CONFIG_SCHED_DOMAIN
-extern struct sched_domain __rcu *sd_llc[];
-extern int sd_llc_size[];
-extern int sd_llc_id[];
-#endif
+/**
+ * DOC: Capacity Aware Superset Scheduler (CASS) description
+ *
+ * The Capacity Aware Superset Scheduler (CASS) optimizes runqueue selection of
+ * CFS tasks. By using CPU capacity as a basis for comparing the relative
+ * utilization between different CPUs, CASS fairly balances load across CPUs of
+ * varying capacities. This results in improved multi-core performance,
+ * especially when CPUs are overutilized because CASS doesn't clip a CPU's
+ * utilization when it eclipses the CPU's capacity.
+ *
+ * As a superset of capacity aware scheduling, CASS implements a hierarchy of
+ * criteria to determine the better CPU to wake a task upon between CPUs that
+ * have the same relative utilization. This way, single-core performance,
+ * latency, and cache affinity are all optimized where possible.
+ *
+ * CASS doesn't feature explicit energy awareness but its basic load balancing
+ * principle results in decreased overall energy, often better than what is
+ * possible with explicit energy awareness. By fairly balancing load based on
+ * relative utilization, all CPUs are kept at their lowest P-state necessary to
+ * satisfy the overall load at any given moment.
+ */
 
 struct cass_cpu_cand {
 	int cpu;
@@ -230,9 +227,8 @@ static int cass_best_cpu(struct task_struct *p, int prev_cpu, bool sync, bool rt
 	 * that RT tasks don't have per-entity load tracking.
 	 */
 	p_util = rt ? 0 : task_util_est(p);
-#ifdef CONFIG_UCLAMP_TASK
 	uc_min = uclamp_eff_value(p, UCLAMP_MIN);
-#endif
+
 	/*
 	 * When the LLC spans all CPUs (e.g. DynamIQ), every candidate shares
 	 * the cache with prev_cpu and the comparison can never produce a winner.
