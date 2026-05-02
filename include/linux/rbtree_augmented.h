@@ -288,4 +288,64 @@ rb_erase_augmented_cached(struct rb_node *node, struct rb_root_cached *root,
 		__rb_erase_color(rebalance, &root->rb_root, augment->rotate);
 }
 
+/*
+ * Declare augmented rbtree callbacks with a max-type augmented value.
+ * rbcompute(node, exit) returns true if the augmented value is unchanged.
+ */
+#define RB_DECLARE_CALLBACKS_MAX(rbstatic, rbname, rbstruct, rbfield,	\
+				 rbtype, rbaugmented, rbcompute)	\
+static inline void							\
+rbname ## _propagate(struct rb_node *rb, struct rb_node *stop)		\
+{									\
+	while (rb != stop) {						\
+		rbstruct *node = rb_entry(rb, rbstruct, rbfield);	\
+		if (rbcompute(node, false))				\
+			break;						\
+		rb = rb_parent(&node->rbfield);				\
+	}								\
+}									\
+static inline void							\
+rbname ## _copy(struct rb_node *rb_old, struct rb_node *rb_new)		\
+{									\
+	rbstruct *old = rb_entry(rb_old, rbstruct, rbfield);		\
+	rbstruct *new = rb_entry(rb_new, rbstruct, rbfield);		\
+	new->rbaugmented = old->rbaugmented;				\
+}									\
+static void								\
+rbname ## _rotate(struct rb_node *rb_old, struct rb_node *rb_new)	\
+{									\
+	rbstruct *old = rb_entry(rb_old, rbstruct, rbfield);		\
+	rbstruct *new = rb_entry(rb_new, rbstruct, rbfield);		\
+	new->rbaugmented = old->rbaugmented;				\
+	rbcompute(old, false);						\
+}									\
+rbstatic const struct rb_augment_callbacks rbname = {			\
+	.propagate = rbname ## _propagate,				\
+	.copy      = rbname ## _copy,					\
+	.rotate    = rbname ## _rotate					\
+};
+
+static inline void
+rb_add_augmented_cached(struct rb_node *node, struct rb_root_cached *root,
+			bool (*less)(struct rb_node *, const struct rb_node *),
+			const struct rb_augment_callbacks *augment)
+{
+	struct rb_node **link = &root->rb_root.rb_node;
+	struct rb_node *parent = NULL;
+	bool leftmost = true;
+
+	while (*link) {
+		parent = *link;
+		if (less(node, parent)) {
+			link = &parent->rb_left;
+		} else {
+			link = &parent->rb_right;
+			leftmost = false;
+		}
+	}
+
+	rb_link_node(node, parent, link);
+	rb_insert_augmented_cached(node, root, leftmost, augment);
+}
+
 #endif	/* _LINUX_RBTREE_AUGMENTED_H */
