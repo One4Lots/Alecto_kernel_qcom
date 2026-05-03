@@ -3067,6 +3067,8 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 #endif
 	p->se.vlag			= 0;
 	p->se.slice			= sysctl_sched_min_granularity;
+	p->se.deadline     = 0;
+	p->se.min_deadline = 0;
 
 	INIT_LIST_HEAD(&p->se.group_node);
 
