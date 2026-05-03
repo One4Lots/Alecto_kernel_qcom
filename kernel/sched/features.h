@@ -51,7 +51,6 @@ SCHED_FEAT(TTWU_QUEUE, false)
  * When doing wakeups, attempt to limit superfluous scans of the LLC domain.
  */
 SCHED_FEAT(SIS_AVG_CPU, false)
-SCHED_FEAT(SIS_PROP, true)
 
 /*
  * Issue a WARN when we do multiple update_rq_clock() calls
@@ -134,3 +133,9 @@ SCHED_FEAT(SCHEDTUNE_BOOST_HOLD_ALL, false)
 SCHED_FEAT(SCHEDTUNE_BOOST_UTIL, false)
 
 SCHED_FEAT(EEVDF, true)
+
+/*
+ * Do newidle balancing proportional to its success rate using randomization.
+ */
+SCHED_FEAT(NI_RANDOM, true)
+SCHED_FEAT(NI_RATE, true)
