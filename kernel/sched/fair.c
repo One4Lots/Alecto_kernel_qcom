@@ -104,15 +104,13 @@ enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_N
  *
  * (default: 0.75 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_min_granularity		= 1500000ULL;
-unsigned int normalized_sysctl_sched_min_granularity	= 1500000ULL;
+unsigned int sysctl_sched_base_slice			= 2800000ULL;
+static unsigned int normalized_sysctl_sched_base_slice	= 2800000ULL;
 
 /*
- * This value is kept at sysctl_sched_min_granularity * (1 + ilog(ncpus))
+ * This value is kept at sysctl_sched_base_slice * (1 + ilog(ncpus))
  * (default: 6ms * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_latency			= 24000000ULL;
-unsigned int normalized_sysctl_sched_latency		= 24000000ULL;
 
 /*
  * Enable/disable energy-aware scheduling.
@@ -239,7 +237,7 @@ static void update_sysctl(void)
 
 #define SET_SYSCTL(name) \
 	(sysctl_##name = (factor) * normalized_sysctl_##name)
-	SET_SYSCTL(sched_min_granularity);
+	SET_SYSCTL(sched_base_slice);
 #undef SET_SYSCTL
 }
 
@@ -971,7 +969,7 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
 
 #define WRT_SYSCTL(name) \
 	(normalized_sysctl_##name = sysctl_##name / (factor))
-	WRT_SYSCTL(sched_min_granularity);
+	WRT_SYSCTL(sched_base_slice);
 #undef WRT_SYSCTL
 
 	return 0;
@@ -992,9 +990,9 @@ static void update_deadline(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	/*
 	 * For EEVDF the virtual time slope is determined by w_i (iow.
 	 * nice) while the request time r_i is determined by
-	 * sysctl_sched_min_granularity.
+	 * sysctl_sched_base_slice.
 	 */
-	se->slice = sysctl_sched_min_granularity;
+	se->slice = sysctl_sched_base_slice;
 
 	/*
 	 * EEVDF: vd_i = ve_i + r_i / w_i
@@ -4180,9 +4178,9 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 			unsigned long thresh;
 
 			if (se_is_idle(se))
-				thresh = sysctl_sched_min_granularity;
+				thresh = sysctl_sched_base_slice;
 			else
-				thresh = sysctl_sched_latency;
+				thresh = sysctl_sched_base_slice;
 
 			thresh >>= 1;
 
