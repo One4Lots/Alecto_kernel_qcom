@@ -417,8 +417,6 @@ struct task_group {
 	struct uclamp_se	uclamp[UCLAMP_CNT];
 	/* Latency-sensitive flag used for a task group */
 	unsigned int		latency_sensitive;
-	/* Boosted flag for a task group */
-	unsigned int 		boosted;
 #endif
 
 };
@@ -2723,18 +2721,7 @@ static inline bool uclamp_latency_sensitive(struct task_struct *p)
 
 static inline bool uclamp_boosted(struct task_struct *p)
 {
-	struct cgroup_subsys_state *css = task_css(p, cpuset_cgrp_id);
-	struct task_group *tg;
-
-	if (!css)
-		return false;
-
-	if (!strlen(css->cgroup->kn->name))
-		return 0;
-
-	tg = container_of(css, struct task_group, css);
-
-	return tg->boosted;
+	return uclamp_eff_value(p, UCLAMP_MIN) > 0;
 }
 #else
 static inline bool uclamp_latency_sensitive(struct task_struct *p)
