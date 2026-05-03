@@ -2690,6 +2690,13 @@ static inline bool uclamp_is_used(void)
 #endif /* CONFIG_UCLAMP_TASK */
 
 #ifdef CONFIG_UCLAMP_TASK_GROUP
+
+static inline unsigned long uclamp_rq_get(struct rq *rq,
+					   enum uclamp_id clamp_id)
+{
+	return READ_ONCE(rq->uclamp[clamp_id].value);
+}
+
 static inline bool uclamp_latency_sensitive(struct task_struct *p)
 {
 	struct cgroup_subsys_state *css = task_css(p, cpuset_cgrp_id);

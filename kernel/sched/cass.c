@@ -30,7 +30,7 @@ static inline unsigned long thermal_load_avg(struct rq *rq)
 }
 
 #ifndef fits_capacity
-static inline bool fits_capacity(unsigned long util, unsigned long capacity)
+inline bool fits_capacity(unsigned long util, unsigned long capacity)
 {
     return util <= capacity;
 }

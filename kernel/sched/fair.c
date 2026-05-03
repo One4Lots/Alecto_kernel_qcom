@@ -8097,7 +8097,16 @@ bool __cpu_overutilized(int cpu, int delta)
 
 bool cpu_overutilized(int cpu)
 {
-	return __cpu_overutilized(cpu, 0);
+	unsigned long rq_util_max;
+	unsigned long util = cpu_util(cpu);
+	unsigned long capacity = capacity_of(cpu);
+
+	rq_util_max = uclamp_rq_get(cpu_rq(cpu), UCLAMP_MAX);
+	
+	if (util > rq_util_max)
+		util = rq_util_max;
+
+	return util > capacity;
 }
 
 DEFINE_PER_CPU(struct energy_env, eenv_cache);
