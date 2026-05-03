@@ -11753,12 +11753,23 @@ static inline int find_new_ilb(void)
 static void nohz_balancer_kick(bool only_update)
 {
 	int ilb_cpu;
+	unsigned int flags = NOHZ_BALANCE_KICK;
 
 	nohz.next_balance++;
 
 	ilb_cpu = find_new_ilb();
 
 	if (ilb_cpu >= nr_cpu_ids)
+		return;
+
+	if (only_update)
+		flags |= NOHZ_STATS_KICK;
+
+	/*
+	 * Don't bother if no new NOHZ balance work items for ilb_cpu,
+	 * i.e. all bits in flags are already set in ilb_cpu.
+	 */
+	if ((READ_ONCE(*nohz_flags(ilb_cpu)) & flags) == flags)
 		return;
 
 	if (test_and_set_bit(NOHZ_BALANCE_KICK, nohz_flags(ilb_cpu)))
@@ -11775,7 +11786,6 @@ static void nohz_balancer_kick(bool only_update)
 	 */
 	trace_sched_load_balance_nohz_kick(smp_processor_id(), ilb_cpu);
 	smp_send_reschedule(ilb_cpu);
-	return;
 }
 
 void nohz_balance_exit_idle(unsigned int cpu)
