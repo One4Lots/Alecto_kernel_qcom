@@ -104,15 +104,15 @@ enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_N
  *
  * (default: 0.75 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_min_granularity		= 750000ULL;
-unsigned int normalized_sysctl_sched_min_granularity	= 750000ULL;
+unsigned int sysctl_sched_min_granularity		= 1500000ULL;
+unsigned int normalized_sysctl_sched_min_granularity	= 1500000ULL;
 
 /*
  * This value is kept at sysctl_sched_min_granularity * (1 + ilog(ncpus))
  * (default: 6ms * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_latency			= 6000000ULL;
-unsigned int normalized_sysctl_sched_latency		= 6000000ULL;
+unsigned int sysctl_sched_latency			= 24000000ULL;
+unsigned int normalized_sysctl_sched_latency		= 24000000ULL;
 
 /*
  * Enable/disable energy-aware scheduling.
@@ -668,7 +668,7 @@ void avg_vruntime_update(struct cfs_rq *cfs_rq, s64 delta)
 	/*
 	 * v' = v + d ==> avg_vruntime' = avg_runtime - d*avg_load
 	 */
-	cfs_rq->avg_vruntime -= cfs_rq->avg_load * delta;
+	cfs_rq->avg_vruntime -= (s64)cfs_rq->avg_load * delta;
 }
 
 u64 avg_vruntime(struct cfs_rq *cfs_rq)
@@ -790,7 +790,7 @@ static void update_min_vruntime(struct cfs_rq *cfs_rq)
 	}
 
 	/* ensure we never gain time by being placed backwards. */
-	cfs_rq->min_vruntime = max_vruntime(cfs_rq->min_vruntime, vruntime);
+	cfs_rq->min_vruntime = __update_min_vruntime(cfs_rq, vruntime);
 #ifndef CONFIG_64BIT
 	smp_wmb();
 	cfs_rq->min_vruntime_copy = cfs_rq->min_vruntime;
@@ -921,12 +921,26 @@ static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq)
 		best = curr;
 
 	if (unlikely(!best)) {
-		struct sched_entity *left = __pick_first_entity(cfs_rq);
-		if (left) {
-			pr_err("EEVDF scheduling fail, picking leftmost\n");
-			return left;
-		}
-	}
+    struct sched_entity *left = __pick_first_entity(cfs_rq);
+		pr_err_ratelimited(
+			"EEVDF fail: nr_running=%u avg_vrt=%lld avg_load=%lu "
+			"min_vrt=%llu curr=%d left_dl=%llu left_eligible=%d\n",
+			cfs_rq->nr_running,
+			cfs_rq->avg_vruntime,
+			cfs_rq->avg_load,
+			cfs_rq->min_vruntime,
+			!!cfs_rq->curr,
+			left ? left->deadline : 0ULL,
+			left ? entity_eligible(cfs_rq, left) : -1);
+	if (left) {
+        pr_err_ratelimited(
+            "EEVDF fail: left->vruntime=%llu left->min_deadline=%llu "
+            "left->deadline=%llu min_vrt=%llu\n",
+            left->vruntime, left->min_deadline,
+            left->deadline, cfs_rq->min_vruntime);
+        return left;
+    }
+}
 
 	return best;
 }
@@ -3006,86 +3020,6 @@ account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	cfs_rq->nr_running--;
 }
 
-#ifdef CONFIG_FAIR_GROUP_SCHED
-# ifdef CONFIG_SMP
-static long calc_cfs_shares(struct cfs_rq *cfs_rq, struct task_group *tg)
-{
-	long tg_weight, load, shares;
-
-	/*
-	 * This really should be: cfs_rq->avg.load_avg, but instead we use
-	 * cfs_rq->load.weight, which is its upper bound. This helps ramp up
-	 * the shares for small weight interactive tasks.
-	 */
-	load = scale_load_down(cfs_rq->load.weight);
-
-	tg_weight = atomic_long_read(&tg->load_avg);
-
-	/* Ensure tg_weight >= load */
-	tg_weight -= cfs_rq->tg_load_avg_contrib;
-	tg_weight += load;
-
-	shares = (tg->shares * load);
-	if (tg_weight)
-		shares /= tg_weight;
-
-	/*
-	 * MIN_SHARES has to be unscaled here to support per-CPU partitioning
-	 * of a group with small tg->shares value. It is a floor value which is
-	 * assigned as a minimum load.weight to the sched_entity representing
-	 * the group on a CPU.
-	 *
-	 * E.g. on 64-bit for a group with tg->shares of scale_load(15)=15*1024
-	 * on an 8-core system with 8 tasks each runnable on one CPU shares has
-	 * to be 15*1024*1/8=1920 instead of scale_load(MIN_SHARES)=2*1024. In
-	 * case no task is runnable on a CPU MIN_SHARES=2 should be returned
-	 * instead of 0.
-	 */
-	if (shares < MIN_SHARES)
-		shares = MIN_SHARES;
-	if (shares > tg->shares)
-		shares = tg->shares;
-
-	return shares;
-}
-# else /* CONFIG_SMP */
-static inline long calc_cfs_shares(struct cfs_rq *cfs_rq, struct task_group *tg)
-{
-	return tg->shares;
-}
-# endif /* CONFIG_SMP */
-
-static inline int throttled_hierarchy(struct cfs_rq *cfs_rq);
-
-static void update_cfs_shares(struct sched_entity *se)
-{
-	struct cfs_rq *cfs_rq = group_cfs_rq(se);
-	struct task_group *tg;
-	long shares;
-
-	if (!cfs_rq)
-		return;
-
-	if (throttled_hierarchy(cfs_rq))
-		return;
-
-	tg = cfs_rq->tg;
-
-#ifndef CONFIG_SMP
-	if (likely(se->load.weight == tg->shares))
-		return;
-#endif
-	shares = calc_cfs_shares(cfs_rq, tg);
-
-	reweight_entity(cfs_rq_of(se), se, shares, shares);
-}
-
-#else /* CONFIG_FAIR_GROUP_SCHED */
-static inline void update_cfs_shares(struct sched_entity *se)
-{
-}
-#endif /* CONFIG_FAIR_GROUP_SCHED */
-
 static inline void cfs_rq_util_change(struct cfs_rq *cfs_rq)
 {
 	struct rq *rq = rq_of(cfs_rq);
@@ -3286,7 +3220,7 @@ static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
 
 	enqueue_load_avg(cfs_rq, se);
 	if (se->on_rq) {
-                update_load_sub(&cfs_rq->load, se->load.weight);
+                update_load_add(&cfs_rq->load, se->load.weight);
 		enqueue_runnable_load_avg(cfs_rq, se);
 		if (cfs_rq->curr != se)
 			avg_vruntime_add(cfs_rq, se);
@@ -4353,11 +4287,19 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 */
 	update_load_avg(se, UPDATE_TG);
 	enqueue_entity_load_avg(cfs_rq, se);
-	update_cfs_shares(se);
+	update_cfs_group(se);
 	account_entity_enqueue(cfs_rq, se);
 
 	if (flags & ENQUEUE_WAKEUP)
 		place_entity(cfs_rq, se, 0);
+
+	/*
+	 * Ensure deadline is always valid before __enqueue_entity.
+	 * A zero deadline means this is a new or migrated task that
+	 * never went through place_entity on this rq.
+	 */
+	if (!se->deadline)
+		se->deadline = se->vruntime + calc_delta_fair(se->slice, se);
 	/* Entity has migrated, no longer consider this task hot */
 	if (flags & ENQUEUE_MIGRATED)
 		se->exec_start = 0;
@@ -4429,11 +4371,13 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 */
 	if (!(flags & DEQUEUE_SLEEP))
 		se->vruntime -= cfs_rq->min_vruntime;
+	else
+		update_entity_lag(cfs_rq, se);
 
 	/* return excess runtime on last dequeue */
 	return_cfs_rq_runtime(cfs_rq);
 
-	update_cfs_shares(se);
+	update_cfs_group(se);
 
 	/*
 	 * Now advance min_vruntime if @se was the entity holding it back,
@@ -4533,7 +4477,7 @@ entity_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr, int queued)
 	 * Ensure that runnable average is periodically updated.
 	 */
 	update_load_avg(curr, UPDATE_TG);
-	update_cfs_shares(curr);
+	update_cfs_group(curr);
 
 #ifdef CONFIG_SCHED_HRTICK
 	/*
@@ -5525,7 +5469,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 			break;
 
 		update_load_avg(se, UPDATE_TG);
-		update_cfs_shares(se);
+		update_cfs_group(se);
 	}
 
 	if (!se) {
@@ -5598,7 +5542,7 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 			break;
 
 		update_load_avg(se, UPDATE_TG);
-		update_cfs_shares(se);
+		update_cfs_group(se);
 	}
 
 	if (!se) {
@@ -8711,6 +8655,7 @@ static void migrate_task_rq_fair(struct task_struct *p)
 #endif
 
 		se->vruntime -= min_vruntime;
+		se->deadline = 0;
 	}
 
 	/*
@@ -9383,6 +9328,7 @@ static void detach_task(struct task_struct *p, struct lb_env *env)
 
 	p->on_rq = TASK_ON_RQ_MIGRATING;
 	deactivate_task(env->src_rq, p, DEQUEUE_NOCLOCK);
+	p->se.deadline = 0;
 	lockdep_off();
 	double_lock_balance(env->src_rq, env->dst_rq);
 	if (!(env->src_rq->clock_update_flags & RQCF_UPDATED))
@@ -12502,6 +12448,7 @@ static void detach_task_cfs_rq(struct task_struct *p)
 		 */
 		place_entity(cfs_rq, se, 0);
 		se->vruntime -= cfs_rq->min_vruntime;
+		se->deadline = 0;
 	}
 
 	detach_entity_cfs_rq(se);
@@ -12769,7 +12716,7 @@ int sched_group_set_shares(struct task_group *tg, unsigned long shares)
 		update_rq_clock(rq);
 		for_each_sched_entity(se) {
 			update_load_avg(se, UPDATE_TG);
-			update_cfs_shares(se);
+			update_cfs_group(se);
 		}
 		rq_unlock_irqrestore(rq, &rf);
 	}
