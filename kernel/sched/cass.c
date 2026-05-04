@@ -3,59 +3,7 @@
  * Copyright (C) 2023-2025 Sultan Alsawaf <sultan@kerneltoast.com>.
  */
 
-
-#ifndef _CASS_4_14_COMPAT
-#define _CASS_4_14_COMPAT
-
-#include <linux/sched.h>
-#include <linux/cpuidle.h>
-
-static inline unsigned long cpu_util_dl(struct rq *rq)
-{
-#ifdef CONFIG_SMP
-    return rq->dl.running_bw;
-#else
-    return 0;
-#endif
-}
-
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-    return 0; 
-}
-
-static inline unsigned long thermal_load_avg(struct rq *rq)
-{
-    return 0;
-}
-
-#ifndef fits_capacity
-inline bool fits_capacity(unsigned long util, unsigned long capacity)
-{
-    return util <= capacity;
-}
-#endif
-
-#ifndef arch_scale_min_freq_capacity
-static inline unsigned long arch_scale_min_freq_capacity(int cpu)
-{
-    return arch_scale_cpu_capacity(NULL, cpu);
-}
-#endif
-
-static inline bool choose_idle_cpu(int cpu, struct task_struct *p)
-{
-    if (!idle_cpu(cpu))
-        return false;
-    if (vcpu_is_preempted(cpu))
-        return false;
-    return true;
-}
-
-
-#endif /* _CASS_4_14_COMPAT */
-
-/**
+ /**
  * DOC: Capacity Aware Superset Scheduler (CASS) description
  *
  * The Capacity Aware Superset Scheduler (CASS) optimizes runqueue selection of

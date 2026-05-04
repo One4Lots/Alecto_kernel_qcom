@@ -12883,6 +12883,7 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
 }
  
 #ifdef CONFIG_SCHED_CASS
+#include "cass.h"
 #include "cass.c"
 static int select_task_rq_fair_5to3(struct task_struct *p, int prev_cpu,
                                     int sd_flag, int wake_flags, int sibling_count_hint)
