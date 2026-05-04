@@ -3939,13 +3939,6 @@ static inline unsigned long _task_util_est(struct task_struct *p)
 	return max(ue.ewma, (ue.enqueued & ~UTIL_AVG_UNCHANGED));
 }
 
-static inline unsigned long task_runnable(struct task_struct *p)
-{
-	return READ_ONCE(p->se.avg.runnable_load_avg);
-}
-
-#define UTIL_EST_MARGIN (SCHED_CAPACITY_SCALE / 100)
-
 static inline unsigned long task_util_est(struct task_struct *p)
 {
 #ifdef CONFIG_SCHED_WALT
@@ -4018,13 +4011,6 @@ util_est_dequeue(struct cfs_rq *cfs_rq, struct task_struct *p, bool task_sleep)
 		return;
 
 	/*
-	 * To avoid underestimate of task utilization, skip updates of EWMA if
-	 * we cannot grant that thread got all CPU time it wanted.
-	 */
-	if ((ue.enqueued + UTIL_EST_MARGIN) < task_runnable(p))
-		goto done;
-
-	/*
 	 * Skip update of task's estimated utilization when its EWMA is
 	 * already ~1% close to its last activation value.
 	 */
@@ -4053,7 +4039,6 @@ util_est_dequeue(struct cfs_rq *cfs_rq, struct task_struct *p, bool task_sleep)
 	ue.ewma <<= UTIL_EST_WEIGHT_SHIFT;
 	ue.ewma  += last_ewma_diff;
 	ue.ewma >>= UTIL_EST_WEIGHT_SHIFT;
-done:
 	ue.enqueued |= UTIL_AVG_UNCHANGED;
 	WRITE_ONCE(p->se.avg.util_est, ue);
 
