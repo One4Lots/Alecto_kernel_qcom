@@ -4169,8 +4169,6 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 
 			thresh >>= 1;
 
-			vruntime -= thresh;
-		}
 
 		/*
 		 * Pull vruntime of the entity being placed to the base level of
@@ -4179,6 +4177,10 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 		 * the base as it may be too far off and the comparison may get
 		 * inversed due to s64 overflow.
 		 */
+			if (lag == 0 && se->vlag == 0)
+    			vruntime -= thresh;
+		}
+
 		if (!entity_is_long_sleeper(se))
 			vruntime = max_vruntime(se->vruntime, vruntime);
 	}
@@ -8911,6 +8913,7 @@ static void put_prev_task_fair(struct rq *rq, struct task_struct *prev)
 
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
+		update_load_avg(se, 0);
 		put_prev_entity(cfs_rq, se);
 	}
 }
