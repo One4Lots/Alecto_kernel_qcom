@@ -62,16 +62,13 @@ struct sugov_cpu {
 
 	bool			iowait_boost_pending;
 	unsigned int		iowait_boost;
-	unsigned int		iowait_boost_max;
 	u64			last_update;
 
 	/* The fields below are only needed when sharing a policy. */
 	unsigned long		util;
-	unsigned long		max;
-	unsigned int		flags;
 	u16			*dvfs_headroom_lut;
 
-	/* The field below is for single-CPU policies only. */
+	unsigned long		bw_min;
 };
 
 static DEFINE_PER_CPU(struct sugov_cpu, sugov_cpu);
@@ -88,8 +85,7 @@ static bool sugov_should_rate_limit(struct sugov_policy *sg_policy, u64 time)
 
 static bool sugov_should_update_freq(struct sugov_policy *sg_policy, u64 time)
 {
-	if (sg_policy->policy->fast_switch_enabled &&
-	    !cpufreq_can_do_remote_dvfs(sg_policy->policy))
+	if (!cpufreq_this_cpu_can_update(sg_policy->policy))
 		return false;
 
 	if (unlikely(sg_policy->limits_changed)) {
@@ -99,6 +95,9 @@ static bool sugov_should_update_freq(struct sugov_policy *sg_policy, u64 time)
 	} else if (sg_policy->need_freq_update) {
 		return true;
 	}
+
+	if (arch_scale_freq_invariant())
+		return true;
 
 	return !sugov_should_rate_limit(sg_policy, time);
 }
@@ -163,11 +162,15 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 				  unsigned long util, unsigned long max)
 {
 	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned int freq, idx, l_freq, h_freq, result;
+	unsigned int freq, idx, l_freq, h_freq;
 	unsigned int cpu = cpumask_first(policy->related_cpus);
 
 	freq = sugov_get_lut_freq(cpu, util);
 	trace_sugov_next_freq(policy->cpu, util, max, freq);
+
+	if (freq == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)
+		return sg_policy->next_freq;
+
 	sg_policy->cached_raw_freq = freq;
 	l_freq = cpufreq_driver_resolve_freq(policy, freq);
 	idx = cpufreq_frequency_table_target(policy, freq, CPUFREQ_RELATION_H);
@@ -175,13 +178,12 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 	h_freq = clamp(h_freq, policy->min, policy->max);
 
 	if (l_freq <= h_freq || l_freq == policy->min)
-		result = l_freq;
-	else if (mult_frac(100, freq - h_freq, l_freq - h_freq) < 20)
-		result = h_freq;
-	else
-		result = l_freq;
+		return l_freq;
 
-	return result;
+	if (mult_frac(100, freq - h_freq, l_freq - h_freq) < 20)
+		return h_freq;
+
+	return l_freq;
 }
 
 static inline unsigned long sugov_apply_dvfs_headroom(unsigned long util,
@@ -208,85 +210,116 @@ static inline unsigned long apply_dvfs_headroom(unsigned long util, int cpu)
 	return sg_cpu->dvfs_headroom_lut[util];
 }
 
-static inline unsigned long cpu_util_dl(struct rq *rq)
+static inline unsigned long cpu_bw_dl(struct rq *rq)
 {
 	return (rq->dl.running_bw * SCHED_CAPACITY_SCALE) >> BW_SHIFT;
 }
 
-static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu)
+static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 {
-	struct rq *rq = cpu_rq(cpu);
-	unsigned long cfs_max = arch_scale_cpu_capacity(NULL, cpu);
+	struct rq *rq = cpu_rq(sg_cpu->cpu);
+	unsigned long max = arch_scale_cpu_capacity(NULL, sg_cpu->cpu);
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
-	unsigned long util_raw;
+	unsigned long util;
 
 	if (sched_feat(UTIL_EST))
 		util_cfs = max_t(unsigned long, util_cfs,
 				 READ_ONCE(rq->cfs.avg.util_est.enqueued) & ~UTIL_AVG_UNCHANGED);
 
-	util_raw = util_cfs + cpu_util_rt(cpu) + cpu_util_dl(rq);
-	util_raw = min(util_raw, cfs_max);
-
-	*util = apply_dvfs_headroom(util_raw, cpu);
-	*max  = cfs_max;
+	util = util_cfs + cpu_util_rt(sg_cpu->cpu);
+	sg_cpu->bw_min = cpu_bw_dl(rq);
+	util = min(util + sg_cpu->bw_min, max);
+	util = max(apply_dvfs_headroom(util, sg_cpu->cpu), boost);
+	sg_cpu->util = min(util, max);
 }
 
-static void sugov_set_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
-				   unsigned int flags)
-{
-	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
+#define IOWAIT_BOOST_MIN	(SCHED_CAPACITY_SCALE / 8)
 
-	if (!sg_policy->tunables->iowait_boost_enable)
+static bool sugov_iowait_reset(struct sugov_cpu *sg_cpu, u64 time,
+				bool set_iowait_boost)
+{
+	s64 delta_ns = time - sg_cpu->last_update;
+
+	if (delta_ns <= TICK_NSEC)
+		return false;
+
+	sg_cpu->iowait_boost = set_iowait_boost ? IOWAIT_BOOST_MIN : 0;
+	sg_cpu->iowait_boost_pending = set_iowait_boost;
+
+	return true;
+}
+
+static void sugov_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
+				unsigned int flags)
+{
+	bool set_iowait_boost = flags & SCHED_CPUFREQ_IOWAIT;
+
+	if (sg_cpu->iowait_boost &&
+	    sugov_iowait_reset(sg_cpu, time, set_iowait_boost))
 		return;
 
-	if (flags & SCHED_CPUFREQ_IOWAIT) {
-		if (sg_cpu->iowait_boost_pending)
-			return;
+	if (!set_iowait_boost)
+		return;
 
-		sg_cpu->iowait_boost_pending = true;
+	if (sg_cpu->iowait_boost_pending)
+		return;
+	sg_cpu->iowait_boost_pending = true;
 
-		if (sg_cpu->iowait_boost) {
-			sg_cpu->iowait_boost <<= 1;
-			if (sg_cpu->iowait_boost > sg_cpu->iowait_boost_max)
-				sg_cpu->iowait_boost = sg_cpu->iowait_boost_max;
-		} else {
-			sg_cpu->iowait_boost = sg_cpu->sg_policy->policy->min;
-		}
-	} else if (sg_cpu->iowait_boost) {
-		s64 delta_ns = time - sg_cpu->last_update;
-
-		if (delta_ns > TICK_NSEC) {
-			sg_cpu->iowait_boost = 0;
-			sg_cpu->iowait_boost_pending = false;
-		}
+	if (sg_cpu->iowait_boost) {
+		sg_cpu->iowait_boost =
+			min_t(unsigned int, sg_cpu->iowait_boost << 1, SCHED_CAPACITY_SCALE);
+		return;
 	}
+
+	sg_cpu->iowait_boost = IOWAIT_BOOST_MIN;
 }
 
-static void sugov_iowait_boost(struct sugov_cpu *sg_cpu, unsigned long *util,
-			       unsigned long *max)
+static unsigned long sugov_iowait_apply(struct sugov_cpu *sg_cpu, u64 time,
+					unsigned long max_cap)
 {
-	unsigned int boost_util, boost_max;
-
 	if (!sg_cpu->iowait_boost)
-		return;
+		return 0;
 
-	if (sg_cpu->iowait_boost_pending) {
-		sg_cpu->iowait_boost_pending = false;
-	} else {
+	if (sugov_iowait_reset(sg_cpu, time, false))
+		return 0;
+
+	if (!sg_cpu->iowait_boost_pending) {
 		sg_cpu->iowait_boost >>= 1;
-		if (sg_cpu->iowait_boost < sg_cpu->sg_policy->policy->min) {
+		if (sg_cpu->iowait_boost < IOWAIT_BOOST_MIN) {
 			sg_cpu->iowait_boost = 0;
-			return;
+			return 0;
 		}
 	}
 
-	boost_util = sg_cpu->iowait_boost;
-	boost_max = sg_cpu->iowait_boost_max;
+	sg_cpu->iowait_boost_pending = false;
 
-	if (*util * boost_max < *max * boost_util) {
-		*util = boost_util;
-		*max = boost_max;
-	}
+	return (sg_cpu->iowait_boost * max_cap) >> SCHED_CAPACITY_SHIFT;
+}
+
+static inline void ignore_dl_rate_limit(struct sugov_cpu *sg_cpu)
+{
+	if (cpu_bw_dl(cpu_rq(sg_cpu->cpu)) > sg_cpu->bw_min)
+		sg_cpu->sg_policy->need_freq_update = true;
+}
+
+static inline bool sugov_update_single_common(struct sugov_cpu *sg_cpu,
+					      u64 time, unsigned long max_cap,
+					      unsigned int flags)
+{
+	unsigned long boost;
+
+	sugov_iowait_boost(sg_cpu, time, flags);
+	sg_cpu->last_update = time;
+
+	ignore_dl_rate_limit(sg_cpu);
+
+	if (!sugov_should_update_freq(sg_cpu->sg_policy, time))
+		return false;
+
+	boost = sugov_iowait_apply(sg_cpu, time, max_cap);
+	sugov_get_util(sg_cpu, boost);
+
+	return true;
 }
 
 static void sugov_update_single(struct update_util_data *hook, u64 time,
@@ -295,25 +328,15 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	struct sugov_cpu *sg_cpu = container_of(hook, struct sugov_cpu, update_util);
 	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
 	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned long util, max;
+	unsigned long max_cap;
 	unsigned int next_f;
 
-	sugov_set_iowait_boost(sg_cpu, time, flags);
-	sg_cpu->last_update = time;
+	max_cap = arch_scale_cpu_capacity(NULL, sg_cpu->cpu);
 
-	if (!sugov_should_update_freq(sg_policy, time))
+	if (!sugov_update_single_common(sg_cpu, time, max_cap, flags))
 		return;
 
-	if (flags & SCHED_CPUFREQ_RT_DL) {
-		next_f = policy->cpuinfo.max_freq;
-	} else {
-		sugov_get_util(&util, &max, sg_cpu->cpu);
-		sg_cpu->util = util;
-		sg_cpu->max = max;
-		sg_cpu->flags = flags;
-		sugov_iowait_boost(sg_cpu, &util, &max);
-		next_f = get_next_freq(sg_policy, util, max);
-	}
+	next_f = get_next_freq(sg_policy, sg_cpu->util, max_cap);
 
 	if (!sugov_update_next_freq(sg_policy, time, next_f))
 		return;
@@ -335,27 +358,22 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 {
 	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
 	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned long util = 0, max = 1;
+	unsigned long util = 0, max_cap;
 	unsigned int j;
+
+	max_cap = arch_scale_cpu_capacity(NULL, sg_cpu->cpu);
 
 	for_each_cpu(j, policy->cpus) {
 		struct sugov_cpu *j_sg_cpu = &per_cpu(sugov_cpu, j);
-		unsigned long j_util, j_max;
+		unsigned long boost;
 
-		if (j_sg_cpu->flags & SCHED_CPUFREQ_RT_DL)
-			return policy->cpuinfo.max_freq;
+		boost = sugov_iowait_apply(j_sg_cpu, time, max_cap);
+		sugov_get_util(j_sg_cpu, boost);
 
-		j_util = j_sg_cpu->util;
-		j_max = j_sg_cpu->max;
-		if (j_util * max > j_max * util) {
-			util = j_util;
-			max = j_max;
-		}
-
-		sugov_iowait_boost(j_sg_cpu, &util, &max);
+		util = max(j_sg_cpu->util, util);
 	}
 
-	return get_next_freq(sg_policy, util, max);
+	return get_next_freq(sg_policy, util, max_cap);
 }
 
 static void sugov_update_shared(struct update_util_data *hook, u64 time,
@@ -363,26 +381,18 @@ static void sugov_update_shared(struct update_util_data *hook, u64 time,
 {
 	struct sugov_cpu *sg_cpu = container_of(hook, struct sugov_cpu, update_util);
 	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
-	unsigned long util, max;
 	unsigned int next_f;
-
-	sugov_get_util(&util, &max, sg_cpu->cpu);
 
 	raw_spin_lock(&sg_policy->update_lock);
 
-	sg_cpu->util = util;
-	sg_cpu->max = max;
-	sg_cpu->flags = flags;
-
-	sugov_set_iowait_boost(sg_cpu, time, flags);
+	sugov_iowait_boost(sg_cpu, time, flags);
 	sg_cpu->last_update = time;
+
+	ignore_dl_rate_limit(sg_cpu);
 
 	if (sugov_should_update_freq(sg_policy, time) &&
 	    !(flags & SCHED_CPUFREQ_CONTINUE)) {
-		if (flags & SCHED_CPUFREQ_RT_DL)
-			next_f = sg_policy->policy->cpuinfo.max_freq;
-		else
-			next_f = sugov_next_freq_shared(sg_cpu, time);
+		next_f = sugov_next_freq_shared(sg_cpu, time);
 
 		if (sugov_update_next_freq(sg_policy, time, next_f)) {
 			if (sg_policy->policy->fast_switch_enabled) {
@@ -744,8 +754,6 @@ static int sugov_start(struct cpufreq_policy *policy)
 		memset(sg_cpu, 0, sizeof(*sg_cpu));
 		sg_cpu->cpu = cpu;
 		sg_cpu->sg_policy = sg_policy;
-		sg_cpu->flags = SCHED_CPUFREQ_RT;
-		sg_cpu->iowait_boost_max = policy->cpuinfo.max_freq;
 		sg_cpu->dvfs_headroom_lut = sg_policy->dvfs_headroom_lut;
 	}
 
