@@ -508,11 +508,13 @@ struct cfs_bandwidth { };
 struct cfs_rq {
 	struct load_weight load;
 	unsigned int nr_running, h_nr_running;
+	unsigned int nr_queued, h_nr_queued;
 
 	u64 exec_clock;
 	u64 min_vruntime;
 	s64 avg_vruntime;
 	u64 avg_load;
+	u64 sum_weight;
 #ifndef CONFIG_64BIT
 	u64 min_vruntime_copy;
 #endif
@@ -1727,6 +1729,8 @@ extern const u32 sched_prio_to_wmult[40];
 #define DEQUEUE_SAVE		0x02 /* matches ENQUEUE_RESTORE */
 #define DEQUEUE_MOVE		0x04 /* matches ENQUEUE_MOVE */
 #define DEQUEUE_NOCLOCK		0x08 /* matches ENQUEUE_NOCLOCK */
+#define DEQUEUE_SPECIAL		0x10
+#define DEQUEUE_DELAYED		0x200
 
 #define ENQUEUE_WAKEUP		0x01
 #define ENQUEUE_RESTORE		0x02
@@ -1740,6 +1744,8 @@ extern const u32 sched_prio_to_wmult[40];
 #else
 #define ENQUEUE_MIGRATED	0x00
 #endif
+#define ENQUEUE_INITIAL		0x100
+#define ENQUEUE_DELAYED		0x200
 
 #define RETRY_TASK		((void *)-1UL)
 
@@ -1751,7 +1757,7 @@ struct sched_class {
 #endif
 
 	void (*enqueue_task) (struct rq *rq, struct task_struct *p, int flags);
-	void (*dequeue_task) (struct rq *rq, struct task_struct *p, int flags);
+	bool (*dequeue_task) (struct rq *rq, struct task_struct *p, int flags);
 	void (*yield_task) (struct rq *rq);
 	bool (*yield_to_task) (struct rq *rq, struct task_struct *p, bool preempt);
 

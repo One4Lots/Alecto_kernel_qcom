@@ -48,11 +48,12 @@ enqueue_task_stop(struct rq *rq, struct task_struct *p, int flags)
 	walt_inc_cumulative_runnable_avg(rq, p);
 }
 
-static void
+static bool
 dequeue_task_stop(struct rq *rq, struct task_struct *p, int flags)
 {
 	sub_nr_running(rq, 1);
 	walt_dec_cumulative_runnable_avg(rq, p);
+	return true;
 }
 
 static void yield_task_stop(struct rq *rq)
