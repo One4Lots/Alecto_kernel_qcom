@@ -38,7 +38,6 @@ struct sugov_policy {
 	u64			last_freq_update_time;
 	s64			freq_update_delay_ns;
 	unsigned int		next_freq;
-	unsigned int		cached_raw_freq;
 
 	/* The next fields are only needed if fast switch cannot be used. */
 	struct irq_work		irq_work;
@@ -162,28 +161,12 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 				  unsigned long util, unsigned long max)
 {
 	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned int freq, idx, l_freq, h_freq;
+	unsigned int freq;
 	unsigned int cpu = cpumask_first(policy->related_cpus);
 
 	freq = sugov_get_lut_freq(cpu, util);
 	trace_sugov_next_freq(policy->cpu, util, max, freq);
-
-	if (freq == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)
-		return sg_policy->next_freq;
-
-	sg_policy->cached_raw_freq = freq;
-	l_freq = cpufreq_driver_resolve_freq(policy, freq);
-	idx = cpufreq_frequency_table_target(policy, freq, CPUFREQ_RELATION_H);
-	h_freq = policy->freq_table[idx].frequency;
-	h_freq = clamp(h_freq, policy->min, policy->max);
-
-	if (l_freq <= h_freq || l_freq == policy->min)
-		return l_freq;
-
-	if (mult_frac(100, freq - h_freq, l_freq - h_freq) < 20)
-		return h_freq;
-
-	return l_freq;
+	return clamp(freq, policy->min, policy->max);
 }
 
 static inline unsigned long sugov_apply_dvfs_headroom(unsigned long util,
@@ -746,7 +729,6 @@ static int sugov_start(struct cpufreq_policy *policy)
 	sg_policy->work_in_progress = false;
 	sg_policy->limits_changed = false;
 	sg_policy->need_freq_update = false;
-	sg_policy->cached_raw_freq = 0;
 
 	for_each_cpu(cpu, policy->cpus) {
 		struct sugov_cpu *sg_cpu = &per_cpu(sugov_cpu, cpu);
