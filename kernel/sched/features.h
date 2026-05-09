@@ -71,7 +71,11 @@ SCHED_FEAT(WARN_DOUBLE_CLOCK, false)
  * IPI to that CPU and let that CPU push the RT task to where
  * it should go may be a better scenario.
  */
+# ifdef CONFIG_PREEMPT_RT
 SCHED_FEAT(RT_PUSH_IPI, true)
+# else
+SCHED_FEAT(RT_PUSH_IPI, false)
+# endif
 #endif
 
 SCHED_FEAT(RT_RUNTIME_SHARE, false)
