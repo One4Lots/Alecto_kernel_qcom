@@ -205,10 +205,6 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
 	unsigned long util;
 
-	if (sched_feat(UTIL_EST))
-		util_cfs = max_t(unsigned long, util_cfs,
-				 READ_ONCE(rq->cfs.avg.util_est.enqueued) & ~UTIL_AVG_UNCHANGED);
-
 	util = util_cfs + cpu_util_rt(sg_cpu->cpu);
 	sg_cpu->bw_min = cpu_bw_dl(rq);
 	util = min(util + sg_cpu->bw_min, max);
