@@ -38,7 +38,7 @@ inline bool fits_capacity(unsigned long util, unsigned long capacity)
 #ifndef arch_scale_min_freq_capacity
 static inline unsigned long arch_scale_min_freq_capacity(int cpu)
 {
-    return arch_scale_cpu_capacity(NULL, cpu);
+    return arch_scale_cpu_capacity(cpu);
 }
 #endif
 

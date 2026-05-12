@@ -199,7 +199,7 @@ static inline unsigned long cpu_bw_dl(struct rq *rq)
 static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 {
 	struct rq *rq = cpu_rq(sg_cpu->cpu);
-	unsigned long max = arch_scale_cpu_capacity(NULL, sg_cpu->cpu);
+	unsigned long max = arch_scale_cpu_capacity(sg_cpu->cpu);
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
 	unsigned long util;
 
@@ -308,7 +308,7 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	unsigned long max_cap;
 	unsigned int next_f;
 
-	max_cap = arch_scale_cpu_capacity(NULL, sg_cpu->cpu);
+	max_cap = arch_scale_cpu_capacity(sg_cpu->cpu);
 
 	if (!sugov_update_single_common(sg_cpu, time, max_cap, flags))
 		return;
@@ -338,7 +338,7 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 	unsigned long util = 0, max_cap;
 	unsigned int j;
 
-	max_cap = arch_scale_cpu_capacity(NULL, sg_cpu->cpu);
+	max_cap = arch_scale_cpu_capacity(sg_cpu->cpu);
 
 	for_each_cpu(j, policy->cpus) {
 		struct sugov_cpu *j_sg_cpu = &per_cpu(sugov_cpu, j);
