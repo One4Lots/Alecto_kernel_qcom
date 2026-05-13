@@ -318,3 +318,16 @@ int update_rt_rq_load_avg(u64 now, int cpu, struct rt_rq *rt_rq, int running)
 {
 	return ___update_load_avg(now, cpu, &rt_rq->avg, running, running, NULL, rt_rq);
 }
+
+/*
+ * dl_rq:
+ *
+ *   util_sum = cpu_scale * load_sum
+ *   runnable_sum = util_sum
+ *
+ *   load_avg and runnable_avg are not supported and meaningless.
+ */
+int update_dl_rq_load_avg(u64 now, int cpu, struct dl_rq *dl_rq, int running)
+{
+	return ___update_load_avg(now, cpu, &dl_rq->avg, running, running, NULL, NULL);
+}

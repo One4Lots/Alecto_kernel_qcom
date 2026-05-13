@@ -213,9 +213,9 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
 	unsigned long util;
 
-	util = util_cfs + cpu_util_rt(sg_cpu->cpu);
+	util = util_cfs + cpu_util_rt(sg_cpu->cpu) + READ_ONCE(rq->dl.avg.util_avg);
 	sg_cpu->bw_min = cpu_bw_dl(rq);
-	util = min(util + sg_cpu->bw_min, max);
+	util = min(util, max);
 	util = max(util, boost);
 	sg_cpu->util = sugov_effective_cpu_perf(sg_cpu->cpu, util, 0, max);
 }

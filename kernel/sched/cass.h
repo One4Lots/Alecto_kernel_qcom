@@ -12,7 +12,7 @@
 static inline unsigned long cpu_util_dl(struct rq *rq)
 {
 #ifdef CONFIG_SMP
-    return rq->dl.running_bw;
+    return READ_ONCE(rq->dl.avg.util_avg);
 #else
     return 0;
 #endif

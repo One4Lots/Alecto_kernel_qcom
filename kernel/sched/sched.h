@@ -711,6 +711,8 @@ struct dl_rq {
 	 * of the leftmost (earliest deadline) element.
 	 */
 	struct rb_root_cached pushable_dl_tasks_root;
+
+	struct sched_avg avg;
 #else
 	struct dl_bw dl_bw;
 #endif
