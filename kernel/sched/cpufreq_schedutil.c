@@ -196,6 +196,16 @@ static inline unsigned long cpu_bw_dl(struct rq *rq)
 	return (rq->dl.running_bw * SCHED_CAPACITY_SCALE) >> BW_SHIFT;
 }
 
+static unsigned long sugov_effective_cpu_perf(int cpu, unsigned long util,
+					      unsigned long min,
+					      unsigned long max)
+{
+	util = apply_dvfs_headroom(util, cpu);
+	if (util < max)
+		max = util;
+	return max(min, max);
+}
+
 static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 {
 	struct rq *rq = cpu_rq(sg_cpu->cpu);
@@ -206,8 +216,8 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 	util = util_cfs + cpu_util_rt(sg_cpu->cpu);
 	sg_cpu->bw_min = cpu_bw_dl(rq);
 	util = min(util + sg_cpu->bw_min, max);
-	util = max(apply_dvfs_headroom(util, sg_cpu->cpu), boost);
-	sg_cpu->util = min(util, max);
+	util = max(util, boost);
+	sg_cpu->util = sugov_effective_cpu_perf(sg_cpu->cpu, util, 0, max);
 }
 
 #define IOWAIT_BOOST_MIN	(SCHED_CAPACITY_SCALE / 8)
