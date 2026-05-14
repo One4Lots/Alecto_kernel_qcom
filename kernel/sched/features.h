@@ -10,9 +10,9 @@ SCHED_FEAT(GENTLE_FAIR_SLEEPERS, false)
  * Place new tasks ahead so that they do not starve already running
  * tasks
  */
-SCHED_FEAT(START_DEBIT, true)
-SCHED_FEAT(PLACE_LAG, true)
-SCHED_FEAT(PLACE_DEADLINE_INITIAL, true)
+SCHED_FEAT(START_DEBIT, false)
+SCHED_FEAT(PLACE_LAG, false)
+SCHED_FEAT(PLACE_DEADLINE_INITIAL, false)
 SCHED_FEAT(DELAY_DEQUEUE, false)
 SCHED_FEAT(DELAY_ZERO, true)
 
@@ -135,6 +135,32 @@ SCHED_FEAT(SCHEDTUNE_BOOST_HOLD_ALL, false)
 SCHED_FEAT(SCHEDTUNE_BOOST_UTIL, false)
 
 SCHED_FEAT(EEVDF, true)
+
+/*
+ * EEVDF: Eligibility reduces scheduling latency of high-nice tasks at the
+ * cost of runtime of low-nice tasks. Disable for workloads (e.g. Chrome/UI)
+ * where background tasks should not interrupt foreground tasks.
+ */
+SCHED_FEAT(ENFORCE_ELIGIBILITY, false)
+
+/*
+ * EEVDF: Allow tasks with a shorter slice to wakeup-preempt the current task,
+ * overriding slice protection. Improves latency for interactive tasks.
+ */
+SCHED_FEAT(PREEMPT_SHORT, true)
+
+/*
+ * EEVDF: Protect the current task's slice against preemption only up to the
+ * minimum slice of all runnable tasks (run-to-parity). When disabled, the
+ * full normalized base slice is used as the protection window.
+ */
+SCHED_FEAT(RUN_TO_PARITY, false)
+
+/*
+ * EEVDF: Honor the ->next buddy hint when picking the next task, allowing
+ * cache-warm tasks to run ahead of strict deadline order.
+ */
+SCHED_FEAT(PICK_BUDDY, true)
 
 /*
  * Do newidle balancing proportional to its success rate using randomization.

@@ -210,7 +210,7 @@ ___update_load_avg(u64 now, int cpu, struct sched_avg *sa,
 	 * se has been already dequeued but cfs_rq->curr still points to it.
 	 * This means that weight will be 0 but not running for a sched_entity
 	 * but also for a cfs_rq if the latter becomes idle. As an example,
-	 * this happens during idle_balance() which calls
+	 * this happens during newidle_balance() which calls
 	 * update_blocked_averages()
 	 */
 	if (!weight)
