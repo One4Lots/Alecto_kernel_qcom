@@ -8,6 +8,7 @@
 
 #include <linux/sched.h>
 #include <linux/cpuidle.h>
+#include "pelt.h"
 
 static inline unsigned long cpu_util_dl(struct rq *rq)
 {
@@ -16,11 +17,6 @@ static inline unsigned long cpu_util_dl(struct rq *rq)
 #else
     return 0;
 #endif
-}
-
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-    return 0; 
 }
 
 static inline unsigned long thermal_load_avg(struct rq *rq)

@@ -211,10 +211,21 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 	struct rq *rq = cpu_rq(sg_cpu->cpu);
 	unsigned long max = arch_scale_cpu_capacity(sg_cpu->cpu);
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
+	unsigned long irq = cpu_util_irq(rq);
 	unsigned long util;
+
+	if (unlikely(irq >= max)) {
+		sg_cpu->bw_min = cpu_bw_dl(rq);
+		sg_cpu->util = max;
+		return;
+	}
 
 	util = util_cfs + cpu_util_rt(sg_cpu->cpu) + READ_ONCE(rq->dl.avg.util_avg);
 	sg_cpu->bw_min = cpu_bw_dl(rq);
+
+	util = scale_irq_capacity(util, irq, max);
+	util += irq;
+
 	util = min(util, max);
 	util = max(util, boost);
 	sg_cpu->util = sugov_effective_cpu_perf(sg_cpu->cpu, util, 0, max);
