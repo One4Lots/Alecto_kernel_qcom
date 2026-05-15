@@ -2259,7 +2259,7 @@ static void pull_rt_task(struct rq *this_rq)
 	    cpumask_test_cpu(this_rq->cpu, this_rq->rd->rto_mask))
 		return;
 
-#ifdef HAVE_RT_PUSH_IPI
+#if defined(HAVE_RT_PUSH_IPI) && defined(CONFIG_PREEMPT_RT)
 	if (sched_feat(RT_PUSH_IPI)) {
 		tell_cpu_to_push(this_rq);
 		return;
