@@ -686,6 +686,12 @@ struct rt_rq {
 #endif
 };
 
+#ifdef CONFIG_RT_GROUP_SCHED
+#define rt_entity_is_task(rt_se) (!(rt_se)->my_q)
+#else
+#define rt_entity_is_task(rt_se) (1)
+#endif
+
 /* Deadline class' related fields in a runqueue */
 struct dl_rq {
 	/* runqueue is an rbtree, ordered by deadline */
@@ -2745,6 +2751,12 @@ static inline unsigned long uclamp_rq_get(struct rq *rq,
 					   enum uclamp_id clamp_id)
 {
 	return READ_ONCE(rq->uclamp[clamp_id].value);
+}
+
+static inline void uclamp_rq_set(struct rq *rq, enum uclamp_id clamp_id,
+				 unsigned int value)
+{
+	WRITE_ONCE(rq->uclamp[clamp_id].value, value);
 }
 
 static inline bool uclamp_latency_sensitive(struct task_struct *p)
