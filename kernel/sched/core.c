@@ -195,14 +195,16 @@ static void update_rq_clock_task(struct rq *rq, s64 delta)
 	rq->clock_task += delta;
 
 #if defined(CONFIG_IRQ_TIME_ACCOUNTING) || defined(CONFIG_PARAVIRT_TIME_ACCOUNTING)
-	if ((irq_delta + steal) && sched_feat(NONTASK_CAPACITY)) {
+	if (sched_feat(NONTASK_CAPACITY)) {
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
 		update_irq_load_avg(rq, irq_delta + steal);
 #else
-		sched_rt_avg_update(rq, irq_delta + steal);
+		if (irq_delta + steal)
+			sched_rt_avg_update(rq, irq_delta + steal);
 #endif
 	}
 #endif
+	update_rq_clock_pelt(rq, delta);
 }
 
 void update_rq_clock(struct rq *rq)

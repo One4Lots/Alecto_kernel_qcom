@@ -46,6 +46,45 @@ static inline unsigned long scale_irq_capacity(unsigned long util,
 { return util; }
 #endif
 
+static inline u64 rq_clock_pelt(struct rq *rq)
+{
+	lockdep_assert_held(&rq->lock);
+	assert_clock_updated(rq);
+
+	return rq->clock_pelt - rq->lost_idle_time;
+}
+
+static inline void _update_idle_rq_clock_pelt(struct rq *rq)
+{
+	rq->clock_pelt = rq_clock_task(rq);
+}
+
+static inline void update_rq_clock_pelt(struct rq *rq, s64 delta)
+{
+	if (unlikely(is_idle_task(rq->curr))) {
+		_update_idle_rq_clock_pelt(rq);
+		return;
+	}
+
+	delta = cap_scale(delta, arch_scale_cpu_capacity(cpu_of(rq)));
+	delta = cap_scale(delta, arch_scale_freq_capacity(cpu_of(rq)));
+
+	rq->clock_pelt += delta;
+}
+
+static inline void update_idle_rq_clock_pelt(struct rq *rq)
+{
+	u32 divider = ((LOAD_AVG_MAX - 1024) << SCHED_CAPACITY_SHIFT) - LOAD_AVG_MAX;
+	u32 util_sum = rq->cfs.avg.util_sum;
+	util_sum += rq->rt.avg.util_sum;
+	util_sum += rq->dl.avg.util_sum;
+
+	if (util_sum >= divider)
+		rq->lost_idle_time += rq_clock_task(rq) - rq->clock_pelt;
+
+	_update_idle_rq_clock_pelt(rq);
+}
+
 #endif /* CONFIG_SMP */
 
 #endif /* _KERNEL_SCHED_PELT_H */
