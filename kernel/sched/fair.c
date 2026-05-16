@@ -537,10 +537,43 @@ void account_cfs_rq_runtime(struct cfs_rq *cfs_rq, u64 delta_exec);
  * Scheduling class tree data structure manipulation methods:
  */
 
+extern void __BUILD_BUG_vruntime_cmp(void);
+
+#define vruntime_cmp(A, CMP_STR, B) ({				\
+	int __res = 0;						\
+								\
+	if (!__builtin_strcmp(CMP_STR, "<")) {			\
+		__res = ((s64)((A)-(B)) < 0);			\
+	} else if (!__builtin_strcmp(CMP_STR, "<=")) {		\
+		__res = ((s64)((A)-(B)) <= 0);			\
+	} else if (!__builtin_strcmp(CMP_STR, ">")) {		\
+		__res = ((s64)((A)-(B)) > 0);			\
+	} else if (!__builtin_strcmp(CMP_STR, ">=")) {		\
+		__res = ((s64)((A)-(B)) >= 0);			\
+	} else {						\
+		__BUILD_BUG_vruntime_cmp();			\
+	}							\
+								\
+	__res;							\
+})
+
+extern void __BUILD_BUG_vruntime_op(void);
+
+#define vruntime_op(A, OP_STR, B) ({				\
+	s64 __res = 0;						\
+								\
+	if (!__builtin_strcmp(OP_STR, "-")) {			\
+		__res = (s64)((A)-(B));				\
+	} else {						\
+		__BUILD_BUG_vruntime_op();			\
+	}							\
+								\
+	__res;							\
+})
+
 static inline u64 max_vruntime(u64 max_vruntime, u64 vruntime)
 {
-	s64 delta = (s64)(vruntime - max_vruntime);
-	if (delta > 0)
+	if (vruntime_cmp(vruntime, ">", max_vruntime))
 		max_vruntime = vruntime;
 
 	return max_vruntime;
@@ -548,22 +581,21 @@ static inline u64 max_vruntime(u64 max_vruntime, u64 vruntime)
 
 static inline u64 min_vruntime(u64 min_vruntime, u64 vruntime)
 {
-	s64 delta = (s64)(vruntime - min_vruntime);
-	if (delta < 0)
+	if (vruntime_cmp(vruntime, "<", min_vruntime))
 		min_vruntime = vruntime;
 
 	return min_vruntime;
 }
 
-static inline int entity_before(struct sched_entity *a,
+static inline bool entity_before(struct sched_entity *a,
 				struct sched_entity *b)
 {
-	return (s64)(a->deadline - b->deadline) < 0;
+	return vruntime_cmp(a->deadline, "<", b->deadline);
 }
 
 static inline s64 entity_key(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	return (s64)(se->vruntime - cfs_rq->zero_vruntime);
+	return vruntime_op(se->vruntime, "-", cfs_rq->zero_vruntime);
 }
 
 #define __node_2_se(node) \
@@ -595,39 +627,81 @@ static inline bool __entity_less(struct rb_node *a, const struct rb_node *b)
  * deltas: (v_i - v), will be in the order of the maximal (virtual) lag
  * induced in the system due to quantisation.
  */
+static inline unsigned long avg_vruntime_weight(struct cfs_rq *cfs_rq, unsigned long w)
+{
+#ifdef CONFIG_64BIT
+	if (cfs_rq->sum_shift)
+		w = max(2UL, w >> cfs_rq->sum_shift);
+#endif
+	return w;
+}
+
 static inline void
 __sum_w_vruntime_add(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	unsigned long weight = scale_load_down(se->load.weight);
-	s64 key = entity_key(cfs_rq, se);
+	unsigned long weight = avg_vruntime_weight(cfs_rq, se->load.weight);
+	s64 w_vruntime, key = entity_key(cfs_rq, se);
 
-	cfs_rq->sum_w_vruntime += key * weight;
+	w_vruntime = key * weight;
+	WARN_ON_ONCE((w_vruntime >> 63) != (w_vruntime >> 62));
+
+	cfs_rq->sum_w_vruntime += w_vruntime;
 	cfs_rq->sum_weight += weight;
+}
+
+static void
+sum_w_vruntime_add_paranoid(struct cfs_rq *cfs_rq, struct sched_entity *se)
+{
+	unsigned long weight;
+	s64 key, tmp;
+	struct rb_node *node;
+
+again:
+	weight = avg_vruntime_weight(cfs_rq, se->load.weight);
+	key = entity_key(cfs_rq, se);
+
+	if (check_mul_overflow(key, (s64)weight, &key))
+		goto overflow;
+
+	if (check_add_overflow(cfs_rq->sum_w_vruntime, key, &tmp))
+		goto overflow;
+
+	cfs_rq->sum_w_vruntime = tmp;
+	cfs_rq->sum_weight += weight;
+	return;
+
+overflow:
+	BUG_ON(cfs_rq->sum_shift >= 10);
+	cfs_rq->sum_shift++;
+
+	cfs_rq->sum_w_vruntime = 0;
+	cfs_rq->sum_weight = 0;
+
+	for (node = cfs_rq->tasks_timeline.rb_leftmost;
+	     node;
+	     node = rb_next(node))
+		__sum_w_vruntime_add(cfs_rq, __node_2_se(node));
+
+	goto again;
 }
 
 static void
 sum_w_vruntime_add(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
+	if (sched_feat(PARANOID_AVG))
+		return sum_w_vruntime_add_paranoid(cfs_rq, se);
+
 	__sum_w_vruntime_add(cfs_rq, se);
 }
 
 static void
 sum_w_vruntime_sub(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	unsigned long weight = scale_load_down(se->load.weight);
+	unsigned long weight = avg_vruntime_weight(cfs_rq, se->load.weight);
 	s64 key = entity_key(cfs_rq, se);
 
 	cfs_rq->sum_w_vruntime -= key * weight;
 	cfs_rq->sum_weight -= weight;
-}
-
-static inline unsigned long avg_vruntime_weight(struct cfs_rq *cfs_rq, unsigned long weight)
-{
-	unsigned long w = scale_load_down(weight);
-#ifdef CONFIG_64BIT
-	w <<= cfs_rq->sum_shift;
-#endif
-	return w;
 }
 
 static inline void update_zero_vruntime(struct cfs_rq *cfs_rq, s64 delta)
@@ -635,7 +709,7 @@ static inline void update_zero_vruntime(struct cfs_rq *cfs_rq, s64 delta)
 	/*
 	 * v' = v + d ==> sum_w_vruntime' = sum_w_vruntime - d*sum_weight
 	 */
-	cfs_rq->sum_w_vruntime -= (s64)cfs_rq->sum_weight * delta;
+	cfs_rq->sum_w_vruntime -= cfs_rq->sum_weight * delta;
 	cfs_rq->zero_vruntime += delta;
 }
 
@@ -652,7 +726,7 @@ u64 avg_vruntime(struct cfs_rq *cfs_rq)
 		s64 runtime = cfs_rq->sum_w_vruntime;
 
 		if (curr) {
-			unsigned long w = scale_load_down(curr->load.weight);
+			unsigned long w = avg_vruntime_weight(cfs_rq, curr->load.weight);
 
 			runtime += entity_key(cfs_rq, curr) * w;
 			weight += w;
@@ -754,17 +828,22 @@ static int vruntime_eligible(struct cfs_rq *cfs_rq, u64 vruntime)
 		unsigned long weight = avg_vruntime_weight(cfs_rq, curr->load.weight);
 
 		avg += entity_key(cfs_rq, curr) * weight;
-		load += scale_load_down(curr->load.weight);
+		load += weight;
 	}
 
-	key = (s64)(vruntime - cfs_rq->zero_vruntime);
+	key = vruntime_op(vruntime, "-", cfs_rq->zero_vruntime);
 
 #ifdef CONFIG_64BIT
-	{
-		__int128 rhs = (__int128)key * load;
-		rhs <<= cfs_rq->sum_shift;
-		return (__int128)avg >= rhs;
-	}
+#ifdef CONFIG_ARCH_SUPPORTS_INT128
+	return avg >= (__int128)key * load;
+#else
+	s64 rhs;
+
+	if (check_mul_overflow(key, load, &rhs))
+		return key <= 0;
+
+	return avg >= rhs;
+#endif
 #else
 	return avg >= key * load;
 #endif
@@ -772,6 +851,9 @@ static int vruntime_eligible(struct cfs_rq *cfs_rq, u64 vruntime)
 
 int entity_eligible(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
+	if (!sched_feat(ENFORCE_ELIGIBILITY))
+		return 1;
+
 	return vruntime_eligible(cfs_rq, se->vruntime);
 }
 
@@ -931,7 +1013,7 @@ static inline void update_protect_slice(struct cfs_rq *cfs_rq, struct sched_enti
 
 static inline bool protect_slice(struct sched_entity *se)
 {
-	return (s64)(se->vruntime - se->vprot) < 0;
+	return vruntime_cmp(se->vruntime, "<", se->vprot);
 }
 
 static inline void cancel_protect_slice(struct sched_entity *se)
@@ -1016,7 +1098,7 @@ static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq, bool protect)
 	}
 
 found:
-	if (!best || (curr && deadline_gt(deadline, best, curr)))
+	if (!best || (curr && entity_before(curr, best)))
 		best = curr;
 
 	if (unlikely(!best)) {
@@ -4252,13 +4334,14 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 
 	if (sched_feat(PLACE_LAG) && cfs_rq->nr_queued && se->vlag) {
 		struct sched_entity *curr = cfs_rq->curr;
-		unsigned long load, weight;
+		long load, weight;
+		bool update_zero = false;
 
 		lag = se->vlag;
 
 		load = cfs_rq->sum_weight;
 		if (curr && curr->on_rq)
-			load += scale_load_down(curr->load.weight);
+			load += avg_vruntime_weight(cfs_rq, curr->load.weight);
 
 		weight = avg_vruntime_weight(cfs_rq, se->load.weight);
 		lag *= load + weight;
@@ -4266,11 +4349,20 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 			load = 1;
 		lag = div64_long(lag, load);
 
-		update_zero_vruntime(cfs_rq, -lag);
+		if (weight > load)
+			update_zero = true;
+
+		se->vruntime = vruntime - lag;
+
+		if (update_zero)
+			update_zero_vruntime(cfs_rq, -lag);
+
+		goto set_deadline;
 	}
 
 	se->vruntime = vruntime - lag;
 
+set_deadline:
 	/*
 	 * When joining the competition; the existing tasks will be,
 	 * on average, halfway through their slice, as such start tasks

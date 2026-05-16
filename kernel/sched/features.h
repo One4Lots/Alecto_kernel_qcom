@@ -137,6 +137,18 @@ SCHED_FEAT(SCHEDTUNE_BOOST_UTIL, false)
 SCHED_FEAT(EEVDF, true)
 
 /*
+ * EEVDF: Reject ineligible tasks during pick. When disabled, all runnable
+ * tasks are treated as eligible (legacy CFS-like behavior).
+ */
+SCHED_FEAT(ENFORCE_ELIGIBILITY, true)
+
+/*
+ * EEVDF: Use overflow-checked sum_w_vruntime accumulation and scale down
+ * weights via sum_shift when multiplication would overflow s64.
+ */
+SCHED_FEAT(PARANOID_AVG, true)
+
+/*
  * EEVDF: Allow tasks with a shorter slice to wakeup-preempt the current task,
  * overriding slice protection. Improves latency for interactive tasks.
  */
