@@ -113,7 +113,7 @@ SCHED_FEAT(ENERGY_AWARE, false)
  *   OFF: Use whichever of target or backup saves most.
  */
 SCHED_FEAT(EAS_PREFER_IDLE, true)
-SCHED_FEAT(FIND_BEST_TARGET, true)
+SCHED_FEAT(FIND_BEST_TARGET, false)
 SCHED_FEAT(FBT_STRICT_ORDER, false)
 
 /*
@@ -140,13 +140,13 @@ SCHED_FEAT(EEVDF, true)
  * EEVDF: Reject ineligible tasks during pick. When disabled, all runnable
  * tasks are treated as eligible (legacy CFS-like behavior).
  */
-SCHED_FEAT(ENFORCE_ELIGIBILITY, true)
+SCHED_FEAT(ENFORCE_ELIGIBILITY, false)
 
 /*
  * EEVDF: Use overflow-checked sum_w_vruntime accumulation and scale down
  * weights via sum_shift when multiplication would overflow s64.
  */
-SCHED_FEAT(PARANOID_AVG, true)
+SCHED_FEAT(PARANOID_AVG, false)
 
 /*
  * EEVDF: Allow tasks with a shorter slice to wakeup-preempt the current task,
