@@ -137,13 +137,6 @@ SCHED_FEAT(SCHEDTUNE_BOOST_UTIL, false)
 SCHED_FEAT(EEVDF, true)
 
 /*
- * EEVDF: Eligibility reduces scheduling latency of high-nice tasks at the
- * cost of runtime of low-nice tasks. Disable for workloads (e.g. Chrome/UI)
- * where background tasks should not interrupt foreground tasks.
- */
-SCHED_FEAT(ENFORCE_ELIGIBILITY, false)
-
-/*
  * EEVDF: Allow tasks with a shorter slice to wakeup-preempt the current task,
  * overriding slice protection. Improves latency for interactive tasks.
  */
