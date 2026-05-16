@@ -398,6 +398,7 @@ pick_next_task_idle(struct rq *rq, struct task_struct *prev, struct rq_flags *rf
 	put_prev_task(rq, prev);
 	update_idle_core(rq);
 	schedstat_inc(rq->sched_goidle);
+	update_idle_rq_clock_pelt(rq);
 	return rq->idle;
 }
 
