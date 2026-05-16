@@ -8,7 +8,6 @@
 
 #include <linux/sched.h>
 #include <linux/cpuidle.h>
-#include "pelt.h"
 
 static inline unsigned long cpu_util_dl(struct rq *rq)
 {

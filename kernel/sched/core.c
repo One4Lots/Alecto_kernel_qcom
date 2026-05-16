@@ -196,14 +196,10 @@ static void update_rq_clock_task(struct rq *rq, s64 delta)
 
 #if defined(CONFIG_IRQ_TIME_ACCOUNTING) || defined(CONFIG_PARAVIRT_TIME_ACCOUNTING)
 	if (sched_feat(NONTASK_CAPACITY)) {
-#ifdef CONFIG_IRQ_TIME_ACCOUNTING
-		update_irq_load_avg(rq, irq_delta + steal);
-#else
 		if (irq_delta + steal)
 			sched_rt_avg_update(rq, irq_delta + steal);
 #endif
 	}
-#endif
 	update_rq_clock_pelt(rq, delta);
 }
 
@@ -215,12 +211,6 @@ void update_rq_clock(struct rq *rq)
 
 	if (rq->clock_update_flags & RQCF_ACT_SKIP)
 		return;
-
-#ifdef CONFIG_SCHED_DEBUG
-	if (sched_feat(WARN_DOUBLE_CLOCK))
-		SCHED_WARN_ON(rq->clock_update_flags & RQCF_UPDATED);
-	rq->clock_update_flags |= RQCF_UPDATED;
-#endif
 
 	delta = sched_clock_cpu(cpu_of(rq)) - rq->clock;
 	if (delta < 0)

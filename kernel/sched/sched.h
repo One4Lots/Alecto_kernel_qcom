@@ -1027,7 +1027,6 @@ struct rq {
 
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
 	u64 prev_irq_time;
-	struct sched_avg avg_irq;
 #endif
 #ifdef CONFIG_PARAVIRT
 	u64 prev_steal_time;
@@ -2293,6 +2292,11 @@ static inline unsigned long cpu_util_rt(int cpu)
 	struct rt_rq *rt_rq = &(cpu_rq(cpu)->rt);
 
 	return rt_rq->avg.util_avg;
+}
+
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+    return 0; 
 }
 
 static inline unsigned long

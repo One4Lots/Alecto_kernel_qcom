@@ -331,32 +331,3 @@ int update_dl_rq_load_avg(u64 now, int cpu, struct dl_rq *dl_rq, int running)
 {
 	return ___update_load_avg(now, cpu, &dl_rq->avg, running, running, NULL, NULL);
 }
-
-#ifdef CONFIG_IRQ_TIME_ACCOUNTING
-/*
- * irq:
- *
- *   util_sum = cpu_scale * load_sum
- *   runnable_sum = util_sum
- *
- *   load_avg and runnable_avg are not supported and meaningless.
- *
- * Two-phase update: decay to (clock - running) with weight=0, then
- * accumulate the IRQ window with weight=1. IRQ time is scaled to
- * reflect actual compute capacity consumed.
- */
-int update_irq_load_avg(struct rq *rq, u64 running)
-{
-	int cpu = cpu_of(rq);
-	int ret = 0;
-
-	running = cap_scale(running, arch_scale_freq_capacity(cpu));
-	running = cap_scale(running, arch_scale_cpu_capacity(cpu));
-
-	ret  = ___update_load_avg(rq->clock - running, cpu, &rq->avg_irq,
-				  0, 0, NULL, NULL);
-	ret += ___update_load_avg(rq->clock, cpu, &rq->avg_irq,
-				  1, 1, NULL, NULL);
-	return ret;
-}
-#endif
