@@ -956,13 +956,37 @@ KBUILD_CFLAGS	+= $(call cc-option,-fdata-sections,)
 endif
 
 ifdef CONFIG_LTO_CLANG
-ifdef CONFIG_THINLTO
-lto-clang-flags	:= -flto=thin
+KBUILD_LDFLAGS += -O3 --lto-O3 --plugin-opt=O3 --strip-debug
 else
-lto-clang-flags	:= -flto
+KBUILD_LDFLAGS += -O3 --strip-debug
 endif
-lto-clang-flags += -fvisibility=default $(call cc-option, -fsplit-lto-unit)
-lto-clang-flags += -fsplit-machine-functions
+
+ifeq ($(cc-name),clang)
+ifdef CONFIG_LTO_CLANG
+ifdef CONFIG_LTO_CLANG_THIN
+CC_FLAGS_LTO	+= -flto=thin -fsplit-lto-unit -funified-lto
+KBUILD_LDFLAGS	+= --thinlto-jobs=$(shell nproc 2>/dev/null || echo 8)
+KBUILD_LDFLAGS	+= --thinlto-cache-dir=$(abspath $(objtree))/.thinlto-cache
+lto-flags	:= -flto=thin
+else
+CC_FLAGS_LTO	+= -flto
+lto-flags	:= -flto
+endif
+CC_FLAGS_LTO	+= -fvisibility=hidden
+CC_FLAGS_LTO	+= $(call cc-option,-fsplit-machine-functions)
+
+# Limit inlining across translation units to reduce binary size
+KBUILD_LDFLAGS += $(call cc-option,-mllvm -import-instr-limit=10)
+ifneq ($(CONFIG_FRAME_WARN),0)
+KBUILD_LDFLAGS	+= -plugin-opt=-warn-stack-size=$(CONFIG_FRAME_WARN)
+endif
+
+ifdef CONFIG_LTO
+KBUILD_CFLAGS	+= $(CC_FLAGS_LTO)
+export CC_FLAGS_LTO
+LTO_CFLAGS	:= $(CC_FLAGS_LTO)
+export LTO_CFLAGS
+endif
 
 KBUILD_LDFLAGS_MODULE += -T scripts/module-lto.lds
 
@@ -970,13 +994,11 @@ KBUILD_LDFLAGS_MODULE += -T scripts/module-lto.lds
 DISABLE_LTO_CLANG := -fno-lto
 export DISABLE_LTO_CLANG
 endif
+endif
 
 ifdef CONFIG_LTO
-LTO_CFLAGS	:= $(lto-clang-flags)
-KBUILD_CFLAGS	+= $(LTO_CFLAGS)
-
 DISABLE_LTO	:= $(DISABLE_LTO_CLANG)
-export LTO_CFLAGS DISABLE_LTO
+export DISABLE_LTO
 
 # LDFINAL_vmlinux and LDFLAGS_FINAL_vmlinux can be set to override
 # the linker and flags for vmlinux_link.
@@ -1341,7 +1363,8 @@ endif
 endif
 
 # Disable clang-specific config options when using a different compiler
-clang-specific-configs := LTO_CLANG CFI_CLANG SHADOW_CALL_STACK INIT_STACK_ALL_ZERO
+clang-specific-configs := LTO_CLANG LTO_CLANG_THIN LTO_CLANG_FULL CFI_CLANG \
+			  SHADOW_CALL_STACK INIT_STACK_ALL_ZERO
 
 PHONY += check-clang-specific-options
 check-clang-specific-options: $(KCONFIG_CONFIG) FORCE
@@ -1599,7 +1622,7 @@ MRPROPER_FILES += .config .config.old .version .old_version \
 		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS \
 		  signing_key.pem signing_key.priv signing_key.x509	\
 		  x509.genkey extra_certificates signing_key.x509.keyid	\
-		  signing_key.x509.signer vmlinux-gdb.py
+		  signing_key.x509.signer vmlinux-gdb.py .thinlto-cache
 
 # clean - Delete most, but leave enough to build external modules
 #
