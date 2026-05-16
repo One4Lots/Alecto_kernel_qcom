@@ -3825,16 +3825,18 @@ update_cfs_rq_load_avg(u64 now, struct cfs_rq *cfs_rq)
 
 	if (atomic_long_read(&cfs_rq->removed_load_avg)) {
 		s64 r = atomic_long_xchg(&cfs_rq->removed_load_avg, 0);
+		u32 divider = LOAD_AVG_MAX - 1024 + sa->period_contrib;
 		sub_positive(&sa->load_avg, r);
-		sub_positive(&sa->load_sum, r * LOAD_AVG_MAX);
+		sub_positive(&sa->load_sum, r * divider);
 		removed_load = 1;
 		set_tg_cfs_propagate(cfs_rq);
 	}
 
 	if (atomic_long_read(&cfs_rq->removed_util_avg)) {
 		long r = atomic_long_xchg(&cfs_rq->removed_util_avg, 0);
+		u32 divider = LOAD_AVG_MAX - 1024 + sa->period_contrib;
 		sub_positive(&sa->util_avg, r);
-		sub_positive(&sa->util_sum, r * LOAD_AVG_MAX);
+		sub_positive(&sa->util_sum, r * divider);
 		removed_util = 1;
 		set_tg_cfs_propagate(cfs_rq);
 	}
