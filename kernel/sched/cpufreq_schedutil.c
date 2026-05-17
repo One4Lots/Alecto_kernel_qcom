@@ -211,13 +211,20 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 	struct rq *rq = cpu_rq(sg_cpu->cpu);
 	unsigned long max = arch_scale_cpu_capacity(sg_cpu->cpu);
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
-	unsigned long util;
+	unsigned long uclamp_min, min, util;
 
 	util = util_cfs + cpu_util_rt(sg_cpu->cpu) + READ_ONCE(rq->dl.avg.util_avg);
-	sg_cpu->bw_min = cpu_bw_dl(rq);
+	uclamp_min = uclamp_rq_get(rq, UCLAMP_MIN);
+	/* scale uclamp_min from SCHED_CAPACITY_SCALE to CPU capacity */
+	uclamp_min = uclamp_min * max >> SCHED_CAPACITY_SHIFT;
+	min = max(cpu_bw_dl(rq), uclamp_min);
+	sg_cpu->bw_min = min;
+
 	util = min(util, max);
+	util = max(util, min);
 	util = max(util, boost);
-	sg_cpu->util = sugov_effective_cpu_perf(sg_cpu->cpu, util, 0, max);
+
+	sg_cpu->util = sugov_effective_cpu_perf(sg_cpu->cpu, util, min, max);
 }
 
 #define IOWAIT_BOOST_MIN	(SCHED_CAPACITY_SCALE / 8)

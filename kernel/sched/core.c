@@ -1523,7 +1523,7 @@ static void __init init_uclamp_rq(struct rq *rq)
 		};
 	}
 
-	rq->uclamp_flags = 0;
+	rq->uclamp_flags = UCLAMP_FLAG_IDLE;
 }
 
 static void __init init_uclamp(void)
@@ -7634,11 +7634,16 @@ static inline void alloc_uclamp_sched_group(struct task_group *tg,
 {
 #ifdef CONFIG_UCLAMP_TASK_GROUP
 	enum uclamp_id clamp_id;
-
 	for_each_clamp_id(clamp_id) {
 		uclamp_se_set(&tg->uclamp_req[clamp_id],
 			      uclamp_none(clamp_id), false);
-		tg->uclamp[clamp_id] = parent->uclamp[clamp_id];
+		/* Effective uclamp_min starts neutral, not inherited from
+		 * parent sysctl value. cpu_util_update_eff will compute
+		 * correct effective value when cgroup is activated. */
+		if (clamp_id == UCLAMP_MIN)
+			uclamp_se_set(&tg->uclamp[clamp_id], 0, false);
+		else
+			tg->uclamp[clamp_id] = parent->uclamp[clamp_id];
 	}
 #endif
 }
