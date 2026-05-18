@@ -546,11 +546,81 @@ struct cfs_bandwidth { };
 
 #endif	/* CONFIG_CGROUP_SCHED */
 
+/*
+ * u64_u32_load/u64_u32_store
+ *
+ * Use a copy of a u64 value to protect against data race. This is only
+ * applicable for 32-bits architectures.
+ */
+#ifdef CONFIG_64BIT
+# define u64_u32_load_copy(var, copy)       var
+# define u64_u32_store_copy(var, copy, val) (var = val)
+#else
+# define u64_u32_load_copy(var, copy)                                   \
+({                                                                      \
+	u64 __val, __val_copy;                                          \
+	do {                                                            \
+		__val_copy = copy;                                      \
+		/*                                                      \
+		 * paired with u64_u32_store_copy(), ordering access    \
+		 * to var and copy.                                     \
+		 */                                                     \
+		smp_rmb();                                              \
+		__val = var;                                            \
+	} while (__val != __val_copy);                                  \
+	__val;                                                          \
+})
+# define u64_u32_store_copy(var, copy, val)                             \
+do {                                                                    \
+	typeof(val) __val = (val);                                      \
+	var = __val;                                                    \
+	/*                                                              \
+	 * paired with u64_u32_load_copy(), ordering access to var and  \
+	 * copy.                                                        \
+	 */                                                             \
+	smp_wmb();                                                      \
+	copy = __val;                                                   \
+} while (0)
+#endif
+# define u64_u32_load(var)      u64_u32_load_copy(var, var##_copy)
+# define u64_u32_store(var, val) u64_u32_store_copy(var, var##_copy, val)
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+#define entity_is_task(se)	(!se->my_q)
+#else
+#define entity_is_task(se)	1
+#endif
+
+static inline unsigned long se_weight(struct sched_entity *se)
+{
+	if (entity_is_task(se))
+		return scale_load_down(se->load.weight);
+
+	return scale_load_down(se->runnable_weight);
+}
+
+static inline unsigned long se_runnable(struct sched_entity *se)
+{
+	if (entity_is_task(se))
+		return !!se->on_rq;
+
+	return se->runnable_weight;
+}
+
+static inline void se_update_runnable(struct sched_entity *se)
+{
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	if (!entity_is_task(se))
+		se->runnable_weight = se->my_q->h_nr_runnable;
+#endif
+}
+
 /* CFS-related fields in a runqueue */
 struct cfs_rq {
 	struct load_weight load;
 	unsigned int nr_running, h_nr_running;
 	unsigned int nr_queued, h_nr_queued;
+	unsigned int h_nr_runnable;
 
 	u64 exec_clock;
 	u64 min_vruntime;
@@ -581,25 +651,33 @@ struct cfs_rq {
 	/*
 	 * CFS load tracking
 	 */
-	struct sched_avg avg;
-	u64 runnable_load_sum;
-	unsigned long runnable_load_avg;
-	unsigned long runnable_weight;
-#ifdef CONFIG_FAIR_GROUP_SCHED
-	unsigned long tg_load_avg_contrib;
-	unsigned long propagate_avg;
-#endif
-	atomic_long_t removed_load_avg, removed_util_avg;
+	/*
+	 * Protects cfs_rq->avg mutations in attach/detach paths that can
+	 * race with lockless readers (cpu_util, group_classify) in the
+	 * load balancer. On 4.19 we lack upstream's seqcount infrastructure,
+	 * so use a raw_spinlock instead.
+	 */
+	raw_spinlock_t		avg_lock;
+	struct sched_avg	avg;
+	unsigned long		runnable_weight;
 #ifndef CONFIG_64BIT
-	u64 load_last_update_time_copy;
+	u64			last_update_time_copy;
 #endif
+	struct {
+		raw_spinlock_t	lock ____cacheline_aligned;
+		int		nr;
+		unsigned long	load_avg;
+		unsigned long	util_avg;
+		unsigned long	runnable_avg;
+	} removed;
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
+	unsigned long		tg_load_avg_contrib;
+	long			propagate;
+	long			prop_runnable_sum;
+
 	/*
 	 *   h_load = weight * f(tg)
-	 *
-	 * Where f(tg) is the recursive weight fraction assigned to
-	 * this group.
 	 */
 	unsigned long h_load;
 	u64 last_h_load_update;
@@ -630,8 +708,8 @@ struct cfs_rq {
 	int runtime_enabled;
 	s64 runtime_remaining;
 
-	u64 throttled_clock, throttled_clock_task;
-	u64 throttled_clock_task_time;
+	u64 throttled_clock, throttled_clock_pelt;
+	u64 throttled_clock_pelt_time;
 	int throttled, throttle_count;
 	struct list_head throttled_list;
 #ifdef CONFIG_SCHED_WALT
@@ -669,8 +747,6 @@ struct rt_rq {
 	unsigned long rt_nr_total;
 	int overloaded;
 	struct plist_head pushable_tasks;
-
-	struct sched_avg avg;
 
 #endif /* CONFIG_SMP */
 	int rt_queued;
@@ -723,8 +799,6 @@ struct dl_rq {
 	 * of the leftmost (earliest deadline) element.
 	 */
 	struct rb_root_cached pushable_dl_tasks_root;
-
-	struct sched_avg avg;
 #else
 	struct dl_bw dl_bw;
 #endif
@@ -886,6 +960,20 @@ struct uclamp_rq {
 DECLARE_STATIC_KEY_FALSE(sched_uclamp_used);
 #endif /* CONFIG_UCLAMP_TASK */
 
+#ifdef CONFIG_ENERGY_MODEL
+#define perf_domain_span(pd) (to_cpumask(((pd)->em_pd->cpus)))
+DECLARE_STATIC_KEY_FALSE(sched_energy_present);
+
+static inline bool sched_energy_enabled(void)
+{
+	return static_branch_unlikely(&sched_energy_present);
+}
+
+#else
+#define perf_domain_span(pd) NULL
+static inline bool sched_energy_enabled(void) { return false; }
+#endif
+
 /*
  * This is the main, per-CPU runqueue data structure.
  *
@@ -956,6 +1044,12 @@ struct rq {
 	u64 clock_task;
 	u64 clock_pelt;
 	unsigned long lost_idle_time;
+	u64 clock_pelt_idle;
+	u64 clock_idle;
+#ifndef CONFIG_64BIT
+	u64 clock_pelt_idle_copy;
+	u64 clock_idle_copy;
+#endif
 
 	atomic_t nr_iowait;
 
@@ -982,6 +1076,15 @@ struct rq {
 	int online;
 
 	struct list_head cfs_tasks;
+
+	struct sched_avg	avg_rt;
+	struct sched_avg	avg_dl;
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+	struct sched_avg	avg_irq;
+#endif
+#ifdef CONFIG_SCHED_THERMAL_PRESSURE
+	struct sched_avg	avg_thermal;
+#endif
 
 	u64 rt_avg;
 	u64 age_stamp;
@@ -1116,6 +1219,20 @@ static inline u32 sched_rng(void)
 #define task_rq(p)		cpu_rq(task_cpu(p))
 #define cpu_curr(cpu)		(cpu_rq(cpu)->curr)
 #define raw_rq()		raw_cpu_ptr(&runqueues)
+
+#define cap_scale(v, s) ((v)*(s) >> SCHED_CAPACITY_SHIFT)
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+static inline struct rq *rq_of(struct cfs_rq *cfs_rq)
+{
+	return cfs_rq->rq;
+}
+#else
+static inline struct rq *rq_of(struct cfs_rq *cfs_rq)
+{
+	return container_of(cfs_rq, struct rq, cfs);
+}
+#endif
 
 extern void update_rq_avg_idle(struct rq *rq);
 extern void update_rq_clock(struct rq *rq);
@@ -1585,7 +1702,7 @@ static inline void __set_task_cpu(struct task_struct *p, unsigned int cpu)
 	 */
 	smp_wmb();
 #ifdef CONFIG_THREAD_INFO_IN_TASK
-	p->cpu = cpu;
+	WRITE_ONCE(p->cpu, cpu);
 #else
 	task_thread_info(p)->cpu = cpu;
 #endif
@@ -2290,14 +2407,7 @@ cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
 
 static inline unsigned long cpu_util_rt(int cpu)
 {
-	struct rt_rq *rt_rq = &(cpu_rq(cpu)->rt);
-
-	return rt_rq->avg.util_avg;
-}
-
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-    return 0; 
+	return cpu_rq(cpu)->avg_rt.util_avg;
 }
 
 static inline unsigned long
@@ -2310,6 +2420,32 @@ cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
 #define sysctl_sched_use_walt_cpu_util 0
 
 #endif /* CONFIG_SCHED_WALT */
+
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_irq.util_avg);
+}
+
+static inline unsigned long
+scale_irq_capacity(unsigned long util, unsigned long irq, unsigned long max)
+{
+	util *= (max - irq);
+	util /= max;
+	return util;
+}
+#else
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return 0;
+}
+
+static inline unsigned long
+scale_irq_capacity(unsigned long util, unsigned long irq, unsigned long max)
+{
+	return util;
+}
+#endif
 
 extern unsigned long
 boosted_cpu_util(int cpu, struct sched_walt_cpu_load *walt_load);
@@ -2533,6 +2669,8 @@ extern struct sched_entity *__pick_last_entity(struct cfs_rq *cfs_rq);
 #ifdef	CONFIG_SCHED_DEBUG
 extern bool sched_debug_enabled;
 
+extern int entity_eligible(struct cfs_rq *cfs_rq, struct sched_entity *se);
+extern struct cfs_rq *cfs_rq_of(struct sched_entity *se);
 extern void print_cfs_stats(struct seq_file *m, int cpu);
 extern void print_rt_stats(struct seq_file *m, int cpu);
 extern void print_dl_stats(struct seq_file *m, int cpu);

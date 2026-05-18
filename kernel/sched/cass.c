@@ -189,7 +189,8 @@ static int cass_best_cpu(struct task_struct *p, int prev_cpu, bool sync, bool rt
 	 * In such scenarios, set prev_llc_id to -1 so that cass_cpu_better() skips
 	 * the check entirely, avoiding unnecessary per_cpu() reads in the hot-path.
 	 */
-	if (unlikely(!rcu_dereference(per_cpu(sd_llc, prev_cpu))) ||
+	/* Use rcu_dereference_sched since we're in a non-preemptible sched context */
+	if (unlikely(!rcu_dereference_sched(per_cpu(sd_llc, prev_cpu))) ||
 	    per_cpu(sd_llc_size, prev_cpu) >= nr_cpu_ids)
 		prev_llc_id = -1;
 	else

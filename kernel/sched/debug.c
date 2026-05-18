@@ -535,7 +535,7 @@ print_task(struct seq_file *m, struct rq *rq, struct task_struct *p)
 	else
 		SEQ_printf(m, " %c", task_state_to_char(p));
 
-	SEQ_printf(m, "%15s %5d %9Ld.%06ld %c %9Ld.%06ld %9Ld.%06ld %9Ld.%06ld %9Ld %5d ",
+	SEQ_printf(m, "%15s %5d %9Ld.%06ld %c %9Ld.%06ld %9Ld.%06ld %9Ld.%06ld %9Ld %5d %c",
 		p->comm, task_pid_nr(p),
 		SPLIT_NS(p->se.vruntime),
 		entity_eligible(cfs_rq_of(&p->se), &p->se) ? 'E' : 'N',
@@ -543,7 +543,8 @@ print_task(struct seq_file *m, struct rq *rq, struct task_struct *p)
 		SPLIT_NS(p->se.slice),
 		SPLIT_NS(p->se.sum_exec_runtime),
 		(long long)(p->nvcsw + p->nivcsw),
-		p->prio);
+		p->prio,
+		p->se.sched_delayed ? 'D' : '.');
 
 	SEQ_printf(m, "%9Ld.%06ld %9Ld.%06ld %9Ld.%06ld",
 		SPLIT_NS(schedstat_val_or_zero(p->se.statistics.wait_sum)),
@@ -621,20 +622,22 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 	SEQ_printf(m, "  .%-30s: %d\n", "nr_spread_over",
 			cfs_rq->nr_spread_over);
 	SEQ_printf(m, "  .%-30s: %d\n", "nr_running", cfs_rq->nr_running);
+	SEQ_printf(m, "  .%-30s: %d\n", "h_nr_running", cfs_rq->h_nr_running);
+	SEQ_printf(m, "  .%-30s: %d\n", "h_nr_queued", cfs_rq->h_nr_queued);
+	SEQ_printf(m, "  .%-30s: %d\n", "h_nr_runnable", cfs_rq->h_nr_runnable);
+	SEQ_printf(m, "  .%-30s: %d\n", "nr_delayed",
+			cfs_rq->h_nr_queued - cfs_rq->h_nr_runnable);
+	SEQ_printf(m, "  .%-30s: %d\n", "sum_shift", cfs_rq->sum_shift);
+	SEQ_printf(m, "  .%-30s: %ld\n", "sum_weight", cfs_rq->sum_weight);
+	SEQ_printf(m, "  .%-30s: %lld\n", "sum_w_vruntime", cfs_rq->sum_w_vruntime);
 	SEQ_printf(m, "  .%-30s: %ld\n", "load", cfs_rq->load.weight);
 #ifdef CONFIG_SMP
 	SEQ_printf(m, "  .%-30s: %lu\n", "load_avg",
 			cfs_rq->avg.load_avg);
-	SEQ_printf(m, "  .%-30s: %lu\n", "runnable_load_avg",
-			cfs_rq->runnable_load_avg);
 	SEQ_printf(m, "  .%-30s: %lu\n", "util_avg",
 			cfs_rq->avg.util_avg);
 	SEQ_printf(m, "  .%-30s: %u\n", "util_est_enqueued",
-			cfs_rq->avg.util_est.enqueued);
-	SEQ_printf(m, "  .%-30s: %ld\n", "removed_load_avg",
-			atomic_long_read(&cfs_rq->removed_load_avg));
-	SEQ_printf(m, "  .%-30s: %ld\n", "removed_util_avg",
-			atomic_long_read(&cfs_rq->removed_util_avg));
+			cfs_rq->avg.util_est.enqueued & ~UTIL_AVG_UNCHANGED);
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	SEQ_printf(m, "  .%-30s: %lu\n", "tg_load_avg_contrib",
 			cfs_rq->tg_load_avg_contrib);
@@ -743,11 +746,6 @@ do {									\
 	SEQ_printf(m, "  .%-30s: %ld\n", "curr->pid", (long)(task_pid_nr(rq->curr)));
 	PN(clock);
 	PN(clock_task);
-	P(cpu_load[0]);
-	P(cpu_load[1]);
-	P(cpu_load[2]);
-	P(cpu_load[3]);
-	P(cpu_load[4]);
 #ifdef CONFIG_SMP
 	P(cpu_capacity);
 #endif
@@ -762,6 +760,24 @@ do {									\
 	P(walt_stats.nr_big_tasks);
 	SEQ_printf(m, "  .%-30s: %llu\n", "walt_stats.cumulative_runnable_avg",
 			rq->walt_stats.cumulative_runnable_avg_scaled);
+#endif
+
+	/* Watchdog-relevant: runqueue staleness */
+	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "clock_pelt",
+			SPLIT_NS(rq->clock_pelt));
+	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "idle_stamp",
+			SPLIT_NS(rq->idle_stamp));
+	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "clock_age",
+			SPLIT_NS(__rq_clock_broken(rq) - rq->clock_pelt));
+	/* Watchdog-relevant: delayed tasks still on rq */
+	SEQ_printf(m, "  .%-30s: %d\n", "cfs_nr_delayed",
+			rq->cfs.h_nr_queued - rq->cfs.h_nr_runnable);
+#ifdef CONFIG_CFS_BANDWIDTH
+	/* Watchdog-relevant: CFS bandwidth throttling */
+	SEQ_printf(m, "  .%-30s: %d\n", "cfs_throttled",
+			rq->cfs.throttled);
+	SEQ_printf(m, "  .%-30s: %d\n", "cfs_throttle_count",
+			rq->cfs.throttle_count);
 #endif
 #undef P
 #undef PN
@@ -1016,6 +1032,8 @@ void proc_sched_show_task(struct task_struct *p, struct pid_namespace *ns,
 	SEQ_printf(m, "%-45s:%14Ld.%06ld\n", #F, SPLIT_NS((long long)p->F))
 #define PN_SCHEDSTAT(F) \
 	SEQ_printf(m, "%-45s:%14Ld.%06ld\n", #F, SPLIT_NS((long long)schedstat_val(p->F)))
+#define PM(fmt, ...) \
+    SEQ_printf(m, "  .%-40s: %ld\n", #fmt, (long)fmt)
 
 	PN(se.exec_start);
 	PN(se.vruntime);
@@ -1091,7 +1109,8 @@ void proc_sched_show_task(struct task_struct *p, struct pid_namespace *ns,
 	P(se.avg.util_avg);
 	P(se.avg.last_update_time);
 	P(se.avg.util_est.ewma);
-	PM(se.avg.util_est.enqueued, ~UTIL_AVG_UNCHANGED);
+	SEQ_printf(m, "%-45s:%21u\n", "se.avg.util_est.enqueued",
+		p->se.avg.util_est.enqueued & ~UTIL_AVG_UNCHANGED);
 #endif
 	P(policy);
 	P(prio);

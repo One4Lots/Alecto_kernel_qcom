@@ -211,14 +211,24 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 	struct rq *rq = cpu_rq(sg_cpu->cpu);
 	unsigned long max = arch_scale_cpu_capacity(sg_cpu->cpu);
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
-	unsigned long uclamp_min, min, util;
+	unsigned long uclamp_min, min, util, irq;
 
-	util = util_cfs + cpu_util_rt(sg_cpu->cpu) + READ_ONCE(rq->dl.avg.util_avg);
+	irq = cpu_util_irq(rq);
+	if (unlikely(irq >= max)) {
+		sg_cpu->bw_min = max;
+		sg_cpu->util = max;
+		return;
+	}
+
+	util = util_cfs + cpu_util_rt(sg_cpu->cpu) + READ_ONCE(rq->avg_dl.util_avg);
 	uclamp_min = uclamp_rq_get(rq, UCLAMP_MIN);
-	/* scale uclamp_min from SCHED_CAPACITY_SCALE to CPU capacity */
 	uclamp_min = uclamp_min * max >> SCHED_CAPACITY_SHIFT;
 	min = max(cpu_bw_dl(rq), uclamp_min);
 	sg_cpu->bw_min = min;
+
+	util = min(util, max);
+	util = scale_irq_capacity(util, irq, max);
+	util += irq;
 
 	util = min(util, max);
 	util = max(util, min);

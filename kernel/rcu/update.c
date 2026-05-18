@@ -657,6 +657,12 @@ static int rcu_verify_early_boot_tests(void)
 	return ret;
 }
 late_initcall(rcu_verify_early_boot_tests);
+
+struct lockdep_map rcu_trace_lock_map = {
+    .name = "rcu_trace",
+};
+EXPORT_SYMBOL_GPL(rcu_trace_lock_map);
+
 #else
 void rcu_early_boot_tests(void) {}
 #endif /* CONFIG_PROVE_RCU */

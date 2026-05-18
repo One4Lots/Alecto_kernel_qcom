@@ -12,15 +12,10 @@
 static inline unsigned long cpu_util_dl(struct rq *rq)
 {
 #ifdef CONFIG_SMP
-    return READ_ONCE(rq->dl.avg.util_avg);
+    return READ_ONCE(rq->avg_dl.util_avg);
 #else
     return 0;
 #endif
-}
-
-static inline unsigned long thermal_load_avg(struct rq *rq)
-{
-    return 0;
 }
 
 #ifndef fits_capacity

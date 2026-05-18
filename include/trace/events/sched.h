@@ -972,32 +972,22 @@ TRACE_EVENT(sched_load_cfs_rq,
 		__dynamic_array(char,		path,
 				__trace_sched_path(cfs_rq, NULL, 0)	)
 		__field(	unsigned long,	load			)
+		//__field(	unsigned long,	rbl_load		)
 		__field(	unsigned long,	util			)
-		__field(	unsigned long,	util_pelt          	)
-		__field(	unsigned long,	util_walt          	)
 	),
 
 	TP_fast_assign(
 		__entry->cpu	= __trace_sched_cpu(cfs_rq, NULL);
 		__trace_sched_path(cfs_rq, __get_dynamic_array(path),
 				   __get_dynamic_array_len(path));
-		__entry->load	= cfs_rq->runnable_load_avg;
+		__entry->load	= cfs_rq->avg.load_avg;
+		//__entry->rbl_load 	= cfs_rq->avg.runnable_load_avg;
 		__entry->util	= cfs_rq->avg.util_avg;
-		__entry->util_pelt = cfs_rq->avg.util_avg;
-		__entry->util_walt = 0;
-#ifdef CONFIG_SCHED_WALT
-		if (&cfs_rq->rq->cfs == cfs_rq) {
-			walt_util(__entry->util_walt,
-				  cfs_rq->rq->prev_runnable_sum);
-			if (!walt_disabled && sysctl_sched_use_walt_cpu_util)
-				__entry->util = __entry->util_walt;
-		}
-#endif
 	),
 
-	TP_printk("cpu=%d path=%s load=%lu util=%lu util_pelt=%lu util_walt=%lu",
-		  __entry->cpu, __get_str(path), __entry->load, __entry->util,
-		  __entry->util_pelt, __entry->util_walt)
+	TP_printk("cpu=%d path=%s load=%lu util=%lu",
+		  __entry->cpu, __get_str(path), __entry->load,
+		  __entry->util)
 );
 
 /*
@@ -1018,11 +1008,10 @@ TRACE_EVENT(sched_load_rt_rq,
 
 	TP_fast_assign(
 		__entry->cpu	= cpu;
-		__entry->util	= rt_rq->avg.util_avg;
 	),
 
-	TP_printk("cpu=%d util=%lu", __entry->cpu,
-		  __entry->util)
+	TP_printk("cpu=%d ", __entry->cpu
+		  )
 );
 
 /*
