@@ -61,7 +61,7 @@ SCHED_FEAT(SIS_AVG_CPU, false)
  */
 SCHED_FEAT(WARN_DOUBLE_CLOCK, false)
 
-#if defined(CONFIG_IRQ_WORK) && defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT)
+#ifdef HAVE_RT_PUSH_IPI
 /*
  * In order to avoid a thundering herd attack of CPUs that are
  * lowering their priorities at the same time, and there being
