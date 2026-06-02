@@ -4435,9 +4435,17 @@ static void __sched notrace __schedule(bool preempt)
 	update_rq_clock(rq);
 
 	switch_count = &prev->nivcsw;
-	if (!preempt && prev->state) {
-		if (unlikely(signal_pending_state(prev->state, prev))) {
-			prev->state = TASK_RUNNING;
+	/*
+	 * We must observe prev->state before clearing prev->on_rq (done in
+	 * block_task()), otherwise a concurrent wakeup can slip in and set
+	 * TASK_RUNNING while we see the old sleeping state.  Cache it here
+	 * so every subsequent use is consistent.
+	 */
+	{
+	unsigned long prev_state = READ_ONCE(prev->state);
+	if (!preempt && prev_state) {
+		if (unlikely(signal_pending_state(prev_state, prev))) {
+			WRITE_ONCE(prev->state, TASK_RUNNING);
 		} else {
 			block_task(rq, prev, DEQUEUE_NOCLOCK);
 
@@ -4456,6 +4464,7 @@ static void __sched notrace __schedule(bool preempt)
 		}
 		switch_count = &prev->nvcsw;
 	}
+	} /* prev_state scope */
 
 	next = pick_next_task(rq, prev, &rf);
 	clear_tsk_need_resched(prev);
@@ -4756,6 +4765,15 @@ static inline int rt_effective_prio(struct task_struct *p, int prio)
 	return __rt_effective_prio(pi_task, prio);
 }
 
+static const struct sched_class *__setscheduler_class(int policy, int prio)
+{
+	if (dl_prio(prio))
+		return &dl_sched_class;
+	if (rt_prio(prio))
+		return &rt_sched_class;
+	return &fair_sched_class;
+}
+
 /*
  * rt_mutex_setprio - set the current priority of a task
  * @p: task to boost
@@ -4829,6 +4847,16 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 		queue_flag &= ~DEQUEUE_MOVE;
 
 	prev_class = p->sched_class;
+
+	/*
+	 * If the task is a sched_delayed entity and we're switching its
+	 * sched_class, we must dequeue it from its delayed state first to
+	 * avoid re-enqueuing under the wrong class.
+	 */
+	if (prev_class != __setscheduler_class(p->policy, prio) &&
+	    p->se.sched_delayed)
+		dequeue_task(rq, p, DEQUEUE_SLEEP | DEQUEUE_DELAYED | DEQUEUE_NOCLOCK);
+
 	queued = task_on_rq_queued(p);
 	running = task_current(rq, p);
 	if (queued)
@@ -4877,12 +4905,11 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 
 	check_class_changed(rq, p, prev_class, oldprio);
 out_unlock:
-	/* Avoid rq from going away on us: */
-	preempt_disable();
-	__task_rq_unlock(rq, &rf);
+	/* Caller holds task_struct::pi_lock, IRQs are still disabled */
+	rq_unpin_lock(rq, &rf);
+	raw_spin_unlock(&rq->lock);
 
 	balance_callback(rq);
-	preempt_enable();
 }
 #else
 static inline int rt_effective_prio(struct task_struct *p, int prio)
