@@ -4121,6 +4121,68 @@ void remove_entity_load_avg(struct sched_entity *se)
 	raw_spin_unlock(&cfs_rq->removed.lock);
 }
 
+static inline bool load_avg_is_decayed(struct sched_avg *sa)
+{
+	if (sa->load_sum)
+		return false;
+	if (sa->util_sum)
+		return false;
+	if (sa->runnable_sum)
+		return false;
+	return true;
+}
+
+#ifdef CONFIG_SMP
+/*
+ * Estimate the PELT contribution of a migrating task's load_avg by
+ * accounting for idle time on the source CPU since the last update.
+ * Only done when the source CPU is idle to bound the cost and because
+ * that's when clock staleness causes the greatest inflation risk.
+ */
+static void migrate_se_pelt_lag(struct sched_entity *se)
+{
+	u64 now, lut;
+	struct cfs_rq *cfs_rq;
+	struct rq *rq;
+	bool is_idle;
+
+	if (load_avg_is_decayed(&se->avg))
+		return;
+
+	cfs_rq = cfs_rq_of(se);
+	rq = rq_of(cfs_rq);
+
+	rcu_read_lock();
+	is_idle = is_idle_task(rcu_dereference(rq->curr));
+	rcu_read_unlock();
+
+	/*
+	 * Only compensate when source CPU is idle; that's when we are most
+	 * likely to have a stale clock causing load inflation post-migration.
+	 */
+	if (!is_idle)
+		return;
+
+	now = u64_u32_load(rq->clock_pelt_idle);
+	/*
+	 * Paired with _update_idle_rq_clock_pelt(). Ensures we observe
+	 * the old clock_pelt_idle before the new clock_idle, which at
+	 * worst causes underestimation (safe) rather than overestimation.
+	 */
+	smp_rmb();
+	lut = cfs_rq_last_update_time(cfs_rq);
+
+	if (now < lut)
+		now = lut;
+	else
+		now += sched_clock_cpu(cpu_of(rq)) - u64_u32_load(rq->clock_idle);
+
+	__update_load_avg_blocked_se(now, se);
+}
+#else
+static inline void migrate_se_pelt_lag(struct sched_entity *se) {}
+#endif
+
 static inline unsigned long cfs_rq_runnable_avg(struct cfs_rq *cfs_rq)
 {
 	return cfs_rq->avg.runnable_avg;
@@ -8930,29 +8992,36 @@ pick_cpu:
  */
 static void migrate_task_rq_fair(struct task_struct *p)
 {
+	struct sched_entity *se = &p->se;
+
 	/*
-	 * As blocked tasks retain absolute vruntime the migration needs to
-	 * deal with this by subtracting the old and adding the new
-	 * min_vruntime -- the latter is done by enqueue_entity() when placing
-	 * the task on the new runqueue.
+	 * Reset the deadline on wakeup-migration so that place_entity()
+	 * on the destination rq gives the task a fresh EEVDF deadline
+	 * rather than keeping a stale one from the source rq's timeline.
 	 */
 	if (p->state == TASK_WAKING) {
-		struct sched_entity *se = &p->se;
-
 		se->deadline = 0;
 	}
 
 	/*
-	 * We are supposed to update the task to "current" time, then its up to date
-	 * and ready to go to new CPU/cfs_rq. But we have difficulty in getting
-	 * what current time is, so simply throw away the out-of-date time. This
-	 * will result in the wakee task is less decayed, but giving the wakee more
-	 * load sounds not bad.
+	 * Only remove PELT contribution when the task is not actively
+	 * migrating (TASK_ON_RQ_MIGRATING). During active migration the
+	 * entity is still enqueued on the source rq; dequeue_entity()
+	 * will call remove_entity_load_avg() there. Calling it here too
+	 * would double-subtract and corrupt cfs_rq->avg.
 	 */
-	remove_entity_load_avg(&p->se);
+	if (!task_on_rq_migrating(p)) {
+		remove_entity_load_avg(se);
+
+		/*
+		 * Estimate missing idle decay so PELT doesn't inflate
+		 * utilization on the destination CPU after migration.
+		 */
+		migrate_se_pelt_lag(se);
+	}
 
 	/* Tell new CPU we are migrated */
-	p->se.avg.last_update_time = 0;
+	se->avg.last_update_time = 0;
 }
 
 static void task_dead_fair(struct task_struct *p)
@@ -12657,8 +12726,17 @@ static void task_tick_fair(struct rq *rq, struct task_struct *curr, int queued)
 		entity_tick(cfs_rq, se, queued);
 	}
 
-	if (IS_ENABLED(CONFIG_NUMA_BALANCING) &&
-	    static_branch_unlikely(&sched_numa_balancing))
+	/*
+	 * Queued ticks are hrtick catch-ups; entity_tick() already handled
+	 * the resched. Skip the heavier per-tick work below to avoid
+	 * redundant misfit/overutilized evaluation on every catch-up tick.
+	 */
+	if (queued)
+		return;
+
+
+        if (IS_ENABLED(CONFIG_NUMA_BALANCING) &&
+            static_branch_unlikely(&sched_numa_balancing))
 		task_tick_numa(rq, curr);
 
 	update_misfit_status(curr, rq);
@@ -12672,8 +12750,8 @@ static void task_tick_fair(struct rq *rq, struct task_struct *curr, int queued)
  */
 static void task_fork_fair(struct task_struct *p)
 {
-	struct cfs_rq *cfs_rq;
 	struct sched_entity *se = &p->se, *curr;
+	struct cfs_rq *cfs_rq;
 	struct rq *rq = this_rq();
 	struct rq_flags rf;
 
@@ -12682,21 +12760,20 @@ static void task_fork_fair(struct task_struct *p)
 
 	cfs_rq = task_cfs_rq(current);
 	curr = cfs_rq->curr;
-	if (curr) {
+	if (curr)
 		update_curr(cfs_rq);
-		se->vruntime = curr->vruntime;
-	}
+
+	/*
+	 * place_entity() sets both se->vruntime and se->deadline via
+	 * ENQUEUE_INITIAL. Do not pre-assign vruntime here — it gets
+	 * overwritten anyway — and do not swap vruntimes afterward for
+	 * sched_child_runs_first: swapping vruntime without updating
+	 * deadline breaks EEVDF's deadline = vruntime + slice/weight
+	 * invariant for both parent and child, causing wrong eligibility.
+	 * START_DEBIT in place_entity() already ensures the child doesn't
+	 * preempt the parent on its first run.
+	 */
 	place_entity(cfs_rq, se, ENQUEUE_INITIAL);
-
-	if (sysctl_sched_child_runs_first && curr && entity_before(curr, se)) {
-		/*
-		 * Upon rescheduling, sched_class::put_prev_task() will place
-		 * 'current' within the tree based on its new key value.
-		 */
-		swap(curr->vruntime, se->vruntime);
-		resched_curr(rq);
-	}
-
 	rq_unlock(rq, &rf);
 }
 
