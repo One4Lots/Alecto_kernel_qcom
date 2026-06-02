@@ -112,6 +112,7 @@ accumulate_sum(u64 delta, struct sched_avg *sa,
 	u32 contrib = (u32)delta; /* p == 0 -> delta < 1024 */
 	u64 periods;
 	u64 divider;
+	bool eas_enable = sched_energy_enabled();
 
 	delta += sa->period_contrib;
 	periods = delta / 1024; /* A period is 1024us (~1ms) */
@@ -120,13 +121,33 @@ accumulate_sum(u64 delta, struct sched_avg *sa,
 	 * Step 1: decay old *_sum if we crossed period boundaries.
 	 */
 	if (periods) {
-		sa->load_sum = decay_load(sa->load_sum, periods);
-		sa->runnable_sum = decay_load(sa->runnable_sum, periods);
-		sa->util_sum = decay_load((u64)(sa->util_sum), periods);
+		if (running && eas_enable)
+			delta %= 1024;
+		else {
+			sa->load_sum = decay_load(sa->load_sum, periods);
+			sa->runnable_sum =
+				decay_load(sa->runnable_sum, periods);
+			sa->util_sum = decay_load((u64)(sa->util_sum), periods);
 
-		delta %= 1024;
-		contrib = __accumulate_pelt_segments(periods,
-				1024 - sa->period_contrib, delta);
+			/*
+			 * Step 2
+			 */
+			delta %= 1024;
+			if (load) {
+				/*
+				 * This relies on the:
+				 *
+				 * if (!load)
+				 *	runnable = running = 0;
+				 *
+				 * clause from ___update_load_sum(); this results in
+				 * the below usage of @contrib to disappear entirely,
+				 * so no point in calculating it.
+				 */
+				contrib = __accumulate_pelt_segments(periods,
+						1024 - sa->period_contrib, delta);
+			}
+		}
 	}
 	sa->period_contrib = delta;
 	divider = LOAD_AVG_MAX - 1024 + sa->period_contrib;
@@ -471,34 +492,3 @@ int update_irq_load_avg(struct rq *rq, u64 running)
 	return ret;
 }
 #endif
-
-/*
- * Compat shims for fair.c and rt.c callers that still use the old 4.14 API.
- */
-
-/* fair.c: __update_load_avg_blocked_se(now, cpu, se) */
-int __update_load_avg_blocked_se_compat(u64 now, int cpu, struct sched_entity *se)
-{
-	return __update_load_avg_blocked_se(now, se);
-}
-
-/* fair.c: __update_load_avg_se(now, cpu, cfs_rq, se) */
-int __update_load_avg_se_compat(u64 now, int cpu, struct cfs_rq *cfs_rq,
-				struct sched_entity *se)
-{
-	return __update_load_avg_se(now, cfs_rq, se);
-}
-
-/* fair.c: __update_load_avg_cfs_rq(now, cpu, cfs_rq) */
-int __update_load_avg_cfs_rq_compat(u64 now, int cpu, struct cfs_rq *cfs_rq)
-{
-	return __update_load_avg_cfs_rq(now, cfs_rq);
-}
-
-/* rt.c/fair.c: update_rt_rq_load_avg(now, cpu, rt_rq, running) */
-int update_rt_rq_load_avg_compat(u64 now, int cpu, struct rt_rq *rt_rq, int running)
-{
-	struct rq *rq = container_of(rt_rq, struct rq, rt);
-
-	return update_rt_rq_load_avg(now, rq, running);
-}
