@@ -2657,6 +2657,8 @@ ttwu_do_activate(struct rq *rq, struct task_struct *p, int wake_flags,
 
 	if (wake_flags & WF_MIGRATED)
 		en_flags |= ENQUEUE_MIGRATED;
+	if (wake_flags & WF_SYNC)
+		en_flags |= ENQUEUE_WAKEUP_SYNC;
 #endif
 
 	ttwu_activate(rq, p, en_flags);

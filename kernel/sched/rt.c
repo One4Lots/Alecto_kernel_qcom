@@ -1412,6 +1412,7 @@ static void
 enqueue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 {
 	struct sched_rt_entity *rt_se = &p->rt;
+	bool sync = !!(flags & ENQUEUE_WAKEUP_SYNC);
 
 	schedtune_enqueue_task(p, cpu_of(rq));
 
@@ -1420,7 +1421,8 @@ enqueue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 
 	enqueue_rt_entity(rt_se, flags);
 
-	if (!task_current(rq, p) && p->nr_cpus_allowed > 1)
+	if (!task_current(rq, p) && p->nr_cpus_allowed > 1 &&
+		!should_honor_rt_sync(rq, p, sync))
 		enqueue_pushable_task(rq, p);
 }
 
@@ -2259,7 +2261,7 @@ static void pull_rt_task(struct rq *this_rq)
 	    cpumask_test_cpu(this_rq->cpu, this_rq->rd->rto_mask))
 		return;
 
-#if defined(HAVE_RT_PUSH_IPI) && defined(CONFIG_PREEMPT_RT)
+#ifdef HAVE_RT_PUSH_IPI
 	if (sched_feat(RT_PUSH_IPI)) {
 		tell_cpu_to_push(this_rq);
 		return;
