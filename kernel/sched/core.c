@@ -1606,12 +1606,8 @@ static inline bool dequeue_task(struct rq *rq, struct task_struct *p, int flags)
 
 void activate_task(struct rq *rq, struct task_struct *p, int flags)
 {
-	if (task_on_rq_migrating(p)) {
+	if (task_on_rq_migrating(p))
 		flags |= ENQUEUE_MIGRATED;
-		/* Migration: p->state is still valid, use live check */
-		if (task_contributes_to_load(p) && !p->se.sched_delayed)
-			rq->nr_uninterruptible--;
-	}
 
 	enqueue_task(rq, p, flags);
 }
@@ -1619,8 +1615,7 @@ void activate_task(struct rq *rq, struct task_struct *p, int flags)
 void deactivate_task(struct rq *rq, struct task_struct *p, int flags)
 {
 	SCHED_WARN_ON(flags & DEQUEUE_SLEEP);
-	if (dequeue_task(rq, p, flags) && task_contributes_to_load(p))
-		rq->nr_uninterruptible++;
+	dequeue_task(rq, p, flags);
 }
 
 void __block_task(struct rq *rq, struct task_struct *p)
@@ -2651,14 +2646,15 @@ ttwu_do_activate(struct rq *rq, struct task_struct *p, int wake_flags,
 
 	lockdep_assert_held(&rq->lock);
 
-#ifdef CONFIG_SMP
 	if (p->sched_contributes_to_load)
 		rq->nr_uninterruptible--;
 
-	if (wake_flags & WF_MIGRATED)
-		en_flags |= ENQUEUE_MIGRATED;
 	if (wake_flags & WF_SYNC)
 		en_flags |= ENQUEUE_WAKEUP_SYNC;
+
+#ifdef CONFIG_SMP
+	if (wake_flags & WF_MIGRATED)
+		en_flags |= ENQUEUE_MIGRATED;
 #endif
 
 	ttwu_activate(rq, p, en_flags);
@@ -3005,7 +3001,6 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags,
 
 	walt_try_to_wake_up(p);
 
-	p->sched_contributes_to_load = !!task_contributes_to_load(p);
 	p->state = TASK_WAKING;
 
 	if (p->in_iowait) {
@@ -3093,7 +3088,7 @@ static void try_to_wake_up_local(struct task_struct *p, struct rq_flags *rf)
 			delayacct_blkio_end(p);
 			atomic_dec(&rq->nr_iowait);
 		}
-		if (task_contributes_to_load(p))
+		if (p->sched_contributes_to_load)
 			rq->nr_uninterruptible--;
 		ttwu_activate(rq, p, ENQUEUE_WAKEUP | ENQUEUE_NOCLOCK);
 		note_task_waking(p, wallclock);
@@ -4447,7 +4442,18 @@ static void __sched notrace __schedule(bool preempt)
 		if (unlikely(signal_pending_state(prev_state, prev))) {
 			WRITE_ONCE(prev->state, TASK_RUNNING);
 		} else {
-			block_task(rq, prev, DEQUEUE_NOCLOCK);
+			prev->sched_contributes_to_load =
+				(prev_state & TASK_UNINTERRUPTIBLE) &&
+				!(prev_state & TASK_NOLOAD) &&
+				!(prev->flags & PF_FROZEN);
+
+			if (unlikely(is_special_task_state(prev_state))) {
+				int flags = DEQUEUE_NOCLOCK | DEQUEUE_SPECIAL;
+
+				block_task(rq, prev, flags);
+			} else {
+				block_task(rq, prev, DEQUEUE_NOCLOCK);
+			}
 
 			/*
 			 * If a worker went to sleep, notify and ask workqueue
