@@ -1053,104 +1053,80 @@ static inline void cancel_protect_slice(struct sched_entity *se)
  *     with the earliest virtual deadline.
  *
  * We can do this in O(log n) time due to an augmented RB-tree. The
- * tree keeps the entries sorted on service, but also functions as a
- * heap based on the deadline by keeping:
+ * tree keeps the entries sorted on deadline, but also functions as a
+ * heap based on the vruntime by keeping:
  *
- *  se->min_deadline = min(se->deadline, se->{left,right}->min_deadline)
+ *  se->min_vruntime = min(se->vruntime, se->{left,right}->min_vruntime)
  *
- * Which allows an EDF like search on (sub)trees.
+ * Which allows tree pruning through eligibility.
  */
 static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq, bool protect)
 {
 	struct rb_node *node = cfs_rq->tasks_timeline.rb_root.rb_node;
+	struct sched_entity *se = __pick_first_entity(cfs_rq);
 	struct sched_entity *curr = cfs_rq->curr;
 	struct sched_entity *best = NULL;
-	struct sched_entity *se;
 
 	/*
 	 * We can safely skip eligibility check if there is only one entity
-	 * in this cfs_rq, saving some cycles. But a delayed entity must
-	 * never be picked -- it tried to sleep and is waiting for a proper
-	 * dequeue. Fall through to the tree walk in that case.
+	 * in this cfs_rq, saving some cycles.
 	 */
-	if (cfs_rq->nr_queued == 1) {
-		se = curr && curr->on_rq ? curr : __pick_first_entity(cfs_rq);
-		if (se && se->sched_delayed)
-			return NULL;
-		return se;
+	if (cfs_rq->nr_queued == 1)
+		return curr && curr->on_rq ? curr : se;
+
+	/*
+	 * Picking the ->next buddy will affect latency but not fairness.
+	 */
+	if (sched_feat(PICK_BUDDY) && protect &&
+	    cfs_rq->next && entity_eligible(cfs_rq, cfs_rq->next)) {
+		/* ->next will never be delayed */
+		SCHED_WARN_ON(cfs_rq->next->sched_delayed);
+		return cfs_rq->next;
 	}
 
-	if (curr && (!curr->on_rq || !entity_eligible(cfs_rq, curr) ||
-		     curr->sched_delayed))
+	if (curr && (!curr->on_rq || !entity_eligible(cfs_rq, curr)))
 		curr = NULL;
-
-	if (sched_feat(PICK_BUDDY) && protect &&
-	    cfs_rq->next && entity_eligible(cfs_rq, cfs_rq->next))
-		return cfs_rq->next;
 
 	if (curr && protect && protect_slice(curr))
 		return curr;
 
 	/* Pick the leftmost entity if it's eligible */
-	se = __pick_first_entity(cfs_rq);
 	if (se && entity_eligible(cfs_rq, se)) {
 		best = se;
 		goto found;
 	}
 
+	/* Heap search for the EEVD entity */
 	while (node) {
-		struct sched_entity *se = __node_2_se(node);
+		struct rb_node *left = node->rb_left;
 
 		/*
-		 * If there's an eligible entity in the left subtree, it is
-		 * always better than any entity in the right subtree or
-		 * the current entity.
+		 * Eligible entities in left subtree are always better
+		 * choices, since they have earlier deadlines.
 		 */
-		if (node->rb_left && vruntime_eligible(cfs_rq, __node_2_se(node->rb_left)->min_vruntime)) {
-			node = node->rb_left;
+		if (left && vruntime_eligible(cfs_rq,
+					__node_2_se(left)->min_vruntime)) {
+			node = left;
 			continue;
 		}
 
+		se = __node_2_se(node);
+
 		/*
-		 * If the current entity is eligible, it is the best we can do
-		 * because there are no eligible entities in the left subtree.
+		 * The left subtree either is empty or has no eligible
+		 * entity, so check the current node since it is the one
+		 * with earliest deadline that might be eligible.
 		 */
 		if (entity_eligible(cfs_rq, se)) {
 			best = se;
-			if (!best->sched_delayed)
-				break;
-			/* eligible but delayed -- keep searching rightward */
-			best = NULL;
+			break;
 		}
 
 		node = node->rb_right;
 	}
-
 found:
 	if (!best || (curr && entity_before(curr, best)))
 		best = curr;
-
-	if (unlikely(!best)) {
-		struct sched_entity *left = __pick_first_entity(cfs_rq);
-		if (left) {
-			pr_err_ratelimited(
-				"EEVDF fail: nr_running=%u sum_w_vrt=%lld sum_weight=%lu "
-				"zero_vrt=%llu curr=%d left_dl=%llu left_eligible=%d\n",
-				cfs_rq->nr_running,
-				cfs_rq->sum_w_vruntime,
-				cfs_rq->sum_weight,
-				cfs_rq->zero_vruntime,
-				!!cfs_rq->curr,
-				left->deadline,
-				entity_eligible(cfs_rq, left));
-			pr_err_ratelimited(
-				"EEVDF fail: left->vruntime=%llu left->min_vruntime=%llu "
-				"left->deadline=%llu zero_vrt=%llu\n",
-				left->vruntime, left->min_vruntime,
-				left->deadline, cfs_rq->zero_vruntime);
-			return left;
-		}
-	}
 
 	return best;
 }
@@ -4711,20 +4687,15 @@ extern void __block_task(struct rq *rq, struct task_struct *p);
  * 4) do not run the "skip" process, if something else is available
  */
 static struct sched_entity *
-pick_next_entity(struct rq *rq, struct cfs_rq *cfs_rq, struct sched_entity *curr)
+pick_next_entity(struct rq *rq, struct cfs_rq *cfs_rq, bool protect)
 {
-	struct sched_entity *se;
+	struct sched_entity *se = pick_eevdf(cfs_rq, protect);
 
-	if (sched_feat(NEXT_BUDDY) &&
-	    cfs_rq->next && entity_eligible(cfs_rq, cfs_rq->next) &&
-	    !cfs_rq->next->sched_delayed)
-		return cfs_rq->next;
-
-	se = pick_eevdf(cfs_rq, true);
-
-	if (se && se->sched_delayed) {
+	if (se->sched_delayed) {
 		dequeue_entities(rq, se, DEQUEUE_SLEEP | DEQUEUE_DELAYED);
-		/* Must not reference @se again after dequeue_entities(). */
+		/*
+		 * Must not reference @se again, see __block_task().
+		 */
 		return NULL;
 	}
 	return se;
@@ -9178,7 +9149,7 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
 pick: {
 	struct sched_entity *nse;
 
-	nse = pick_next_entity(rq, cfs_rq, NULL);
+	nse = pick_next_entity(rq, cfs_rq, preempt_action != PREEMPT_WAKEUP_SHORT);
 	if (nse == pse)
 		goto preempt;
 
@@ -9259,7 +9230,7 @@ again:
 			}
 		}
 
-		se = pick_next_entity(rq, cfs_rq, curr);
+		se = pick_next_entity(rq, cfs_rq, true);
 		if (!se)
 			goto idle;
 		cfs_rq = group_cfs_rq(se);
@@ -9305,7 +9276,7 @@ simple:
 	put_prev_task(rq, prev);
 
 	do {
-		se = pick_next_entity(rq, cfs_rq, NULL);
+		se = pick_next_entity(rq, cfs_rq, true);
 		if (!se)
 			goto idle;
 		set_next_entity(cfs_rq, se, !group_cfs_rq(se));
@@ -12928,22 +12899,54 @@ static void switched_to_fair(struct rq *rq, struct task_struct *p)
 	}
 }
 
-/* Account for a task changing its policy or group.
+static void __set_next_task_fair(struct rq *rq, struct task_struct *p, bool first)
+{
+	struct sched_entity *se = &p->se;
+
+#ifdef CONFIG_SMP
+	if (task_on_rq_queued(p)) {
+		/*
+		 * Move the next running task to the front of the list, so our
+		 * cfs_tasks list becomes MRU one.
+		 */
+		list_move(&se->group_node, &rq->cfs_tasks);
+	}
+#endif
+	if (!first)
+		return;
+
+	SCHED_WARN_ON(se->sched_delayed);
+
+	if (hrtick_enabled(rq))
+		hrtick_start_fair(rq, p);
+
+	update_misfit_status(p, rq);
+}
+
+/*
+ * Account for a task changing its policy or group.
  *
  * This routine is mostly called to set cfs_rq->curr field when a task
  * migrates between groups/classes.
  */
-static void set_curr_task_fair(struct rq *rq)
+static void set_next_task_fair(struct rq *rq, struct task_struct *p, bool first)
 {
-	struct sched_entity *se = &rq->curr->se;
+	struct sched_entity *se = &p->se;
 
 	for_each_sched_entity(se) {
 		struct cfs_rq *cfs_rq = cfs_rq_of(se);
 
-		set_next_entity(cfs_rq, se, false);
+		set_next_entity(cfs_rq, se, first);
 		/* ensure bandwidth has been allocated on our new cfs_rq */
 		account_cfs_rq_runtime(cfs_rq, 0);
 	}
+
+	__set_next_task_fair(rq, p, first);
+}
+
+static void set_curr_task_fair(struct rq *rq)
+{
+	set_next_task_fair(rq, rq->curr, false);
 }
 
 void init_cfs_rq(struct cfs_rq *cfs_rq)
