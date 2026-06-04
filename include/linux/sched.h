@@ -536,6 +536,9 @@ struct sched_entity {
 
 	struct list_head		group_node;
 	unsigned int			on_rq;
+	unsigned char			sched_delayed;
+	unsigned char			rel_deadline;
+	unsigned char			custom_slice;
 
 	u64				exec_start;
 	u64				sum_exec_runtime;
@@ -551,10 +554,6 @@ struct sched_entity {
 		u64			vprot;
 	};
 	u64				slice;
-
-	unsigned char			sched_delayed;
-	unsigned char			rel_deadline;
-	unsigned char			custom_slice;
 
 	u64				nr_migrations;
 
