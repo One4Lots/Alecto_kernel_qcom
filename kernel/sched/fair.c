@@ -763,20 +763,20 @@ static s64 entity_lag(struct cfs_rq *cfs_rq, struct sched_entity *se,
 static __always_inline
 bool update_entity_lag(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	s64 vlag = entity_lag(cfs_rq, se, avg_vruntime(cfs_rq));
-	bool ret;
+	u64 avruntime = avg_vruntime(cfs_rq);
+	s64 vlag = entity_lag(cfs_rq, se, avruntime);
 
 	SCHED_WARN_ON(!se->on_rq);
 
 	if (se->sched_delayed) {
+		/* previous vlag < 0 otherwise se would not be delayed */
 		vlag = max(vlag, se->vlag);
 		if (sched_feat(DELAY_ZERO) && vlag > 0)
 			vlag = 0;
 	}
-	ret = (vlag == se->vlag);
 	se->vlag = vlag;
 
-	return ret;
+	return avruntime - vlag != se->vruntime;
 }
 
 static void set_delayed(struct sched_entity *se)
@@ -5667,6 +5667,33 @@ static inline void update_overutilized_status(struct rq *rq)
 
 #endif /* CONFIG_SMP */
 
+static void
+requeue_delayed_entity(struct sched_entity *se)
+{
+	struct cfs_rq *cfs_rq = cfs_rq_of(se);
+
+	/*
+	 * se->sched_delayed should imply: se->on_rq == 1.
+	 * Because a delayed entity is one that is still on
+	 * the runqueue competing until elegibility.
+	 */
+	SCHED_WARN_ON(!se->sched_delayed);
+	SCHED_WARN_ON(!se->on_rq);
+
+	if (update_entity_lag(cfs_rq, se)) {
+		cfs_rq->nr_queued--;
+		if (se != cfs_rq->curr)
+			__dequeue_entity(cfs_rq, se);
+		place_entity(cfs_rq, se, 0);
+		if (se != cfs_rq->curr)
+			__enqueue_entity(cfs_rq, se);
+		cfs_rq->nr_queued++;
+	}
+
+	update_load_avg(se, 0);
+	clear_delayed(se);
+}
+
 /*
  * The enqueue_task method is called before nr_running is
  * increased. Here we update the fair scheduling stats and
@@ -5689,7 +5716,13 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	 * Let's add the task's estimated utilization to the cfs_rq's
 	 * estimated utilization, before we update schedutil.
 	 */
-	util_est_enqueue(&rq->cfs, p);
+	if (!p->se.sched_delayed || (flags & ENQUEUE_DELAYED))
+		util_est_enqueue(&rq->cfs, p);
+
+	if (flags & ENQUEUE_DELAYED) {
+		requeue_delayed_entity(se);
+		return;
+	}
 
 	/*
 	 * The code below (indirectly) updates schedutil which looks at
@@ -5719,15 +5752,8 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 	for_each_sched_entity(se) {
 		if (se->on_rq) {
-			/*
-			 * If the task was delayed (sched_delayed), it is still
-			 * on the rq. Re-enqueue it with ENQUEUE_DELAYED so
-			 * enqueue_entity knows to just clear the delayed flag.
-			 */
-			if (se->sched_delayed) {
-				enqueue_entity(cfs_rq_of(se), se, ENQUEUE_DELAYED | flags);
-				cfs_rq_of(se)->h_nr_queued++;
-			}
+			if (se->sched_delayed)
+				requeue_delayed_entity(se);
 			break;
 		}
 		cfs_rq = cfs_rq_of(se);
