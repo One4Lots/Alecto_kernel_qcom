@@ -8434,6 +8434,47 @@ static int wake_cap(struct task_struct *p, int cpu, int prev_cpu)
 }
 #endif /* CONFIG_SCHED_CASS */
 
+#ifndef fits_capacity
+#define fits_capacity(util, cap) ((util) <= (cap))
+#endif
+
+static inline int util_fits_cpu(unsigned long util,
+				unsigned long uclamp_min,
+				unsigned long uclamp_max,
+				int cpu)
+{
+	unsigned long capacity_orig, capacity_orig_thermal;
+	unsigned long capacity = capacity_of(cpu);
+	bool fits, uclamp_max_fits;
+
+	fits = fits_capacity(util, capacity);
+
+	if (!uclamp_is_used())
+		return fits;
+
+	capacity_orig = capacity_orig_of(cpu);
+	capacity_orig_thermal = capacity_orig; /* FIXME: thermal_load_avg */
+
+	uclamp_max_fits = (capacity_orig == SCHED_CAPACITY_SCALE) && (uclamp_max == SCHED_CAPACITY_SCALE);
+	uclamp_max_fits = !uclamp_max_fits && (uclamp_max <= capacity_orig);
+	fits = fits || uclamp_max_fits;
+
+	uclamp_min = min(uclamp_min, uclamp_max);
+	if (fits && (util < uclamp_min) && (uclamp_min > capacity_orig_thermal))
+		return -1;
+
+	return fits;
+}
+
+static inline int task_fits_cpu(struct task_struct *p, int cpu)
+{
+	unsigned long uclamp_min = uclamp_eff_value(p, UCLAMP_MIN);
+	unsigned long uclamp_max = uclamp_eff_value(p, UCLAMP_MAX);
+	unsigned long util = task_util_est(p);
+
+	return (util_fits_cpu(util, uclamp_min, uclamp_max, cpu) > 0);
+}
+
 bool __cpu_overutilized(int cpu, int delta)
 {
 	return (capacity_orig_of(cpu) * 1024) <
@@ -8442,16 +8483,9 @@ bool __cpu_overutilized(int cpu, int delta)
 
 bool cpu_overutilized(int cpu)
 {
-	unsigned long rq_util_max;
-	unsigned long util = cpu_util(cpu);
-	unsigned long capacity = capacity_of(cpu);
+	unsigned long rq_util_max = uclamp_rq_get(cpu_rq(cpu), UCLAMP_MAX);
 
-	rq_util_max = uclamp_rq_get(cpu_rq(cpu), UCLAMP_MAX);
-	
-	if (util > rq_util_max)
-		util = rq_util_max;
-
-	return util > capacity;
+	return !util_fits_cpu(cpu_util(cpu), 0, rq_util_max, cpu);
 }
 
 DEFINE_PER_CPU(struct energy_env, eenv_cache);
@@ -9571,11 +9605,6 @@ enum migration_type {
 #define LBF_IGNORE_PREFERRED_CLUSTER_TASKS 0x200
 
 #define capacity_greater(cap1, cap2) ((cap1) * 1024 > (cap2) * 1078)
-
-static inline int task_fits_cpu(struct task_struct *p, int cpu)
-{
-	return task_fits_capacity(p, capacity_of(cpu), cpu);
-}
 
 struct lb_env {
 	struct sched_domain	*sd;
