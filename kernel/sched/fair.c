@@ -10643,7 +10643,7 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 		sgs->group_load += load;
 		sgs->group_util += cpu_util(i);
 		sgs->group_runnable += cpu_runnable(rq);
-		sgs->sum_h_nr_running += rq->cfs.h_nr_running;
+		sgs->sum_h_nr_running += rq->cfs.h_nr_runnable;
 
 		nr_running = rq->nr_running;
 		sgs->sum_nr_running += nr_running;
@@ -11451,11 +11451,18 @@ static int should_we_balance(struct lb_env *env)
 		return 0;
 
 	/*
-	 * In the newly idle case, we will allow all the cpu's
+	 * In the newly idle case, we will allow all the CPUs
 	 * to do the newly idle load balance.
+	 *
+	 * However, we bail out if we already have tasks or a wakeup pending,
+	 * to optimize wakeup latency.
 	 */
-	if (env->idle == CPU_NEWLY_IDLE)
+	if (env->idle == CPU_NEWLY_IDLE) {
+		if (env->dst_rq->nr_running > 0 ||
+		    !llist_empty(&env->dst_rq->wake_list))
+			return 0;
 		return 1;
+	}
 
 	/* Try to find first idle cpu */
 	for_each_cpu_and(cpu, group_balance_mask(sg), env->cpus) {
