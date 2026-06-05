@@ -212,6 +212,13 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
 	unsigned long uclamp_min, min, util, irq;
 
+	/*
+	 * Clamp the capacity by the current thermal pressure.
+	 * This prevents the governor from requesting frequency states
+	 * that the CPU cannot sustain due to thermal throttling.
+	 */
+	max -= min(max, thermal_load_avg(rq));
+
 	irq = cpu_util_irq(rq);
 	if (unlikely(irq >= max)) {
 		sg_cpu->bw_min = max;
