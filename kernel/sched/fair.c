@@ -4691,7 +4691,7 @@ pick_next_entity(struct rq *rq, struct cfs_rq *cfs_rq, bool protect)
 {
 	struct sched_entity *se = pick_eevdf(cfs_rq, protect);
 
-	if (se->sched_delayed) {
+	if (se && se->sched_delayed) {
 		dequeue_entities(rq, se, DEQUEUE_SLEEP | DEQUEUE_DELAYED);
 		/*
 		 * Must not reference @se again, see __block_task().
@@ -9220,9 +9220,19 @@ pick: {
 	/*
 	 * nse == NULL means a delayed task was dequeued. If entities
 	 * remain queued, retry to check if pse surfaces as the pick.
+	 *
+	 * Only retry if a task was actually dequeued (indicated by
+	 * pick_next_entity returning NULL while pick_eevdf returned
+	 * something).
 	 */
-	if (!nse && cfs_rq->nr_queued)
-		goto pick;
+	if (!nse && cfs_rq->nr_queued) {
+		/*
+		 * If pick_eevdf() itself returned NULL, then no task is
+		 * eligible and we shouldn't loop.
+		 */
+		if (pick_eevdf(cfs_rq, preempt_action != PREEMPT_WAKEUP_SHORT))
+			goto pick;
+	}
 }
 
 	if (sched_feat(RUN_TO_PARITY))
