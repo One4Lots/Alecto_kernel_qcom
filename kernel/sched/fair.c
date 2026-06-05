@@ -5821,12 +5821,14 @@ static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 	struct task_struct *p = NULL;
 	int h_nr_queued = 0;
 	int h_nr_runnable = 0;
+	int h_nr_running = 0;
 	struct cfs_rq *cfs_rq;
 	u64 slice = 0;
 
 	if (entity_is_task(se)) {
 		p = task_of(se);
 		h_nr_queued = 1;
+		h_nr_running = 1;
 		if (task_sleep || task_delayed || !se->sched_delayed)
 			h_nr_runnable = 1;
 	}
@@ -5845,6 +5847,7 @@ static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 
 		cfs_rq->h_nr_runnable -= h_nr_runnable;
 		cfs_rq->h_nr_queued -= h_nr_queued;
+		cfs_rq->h_nr_running -= h_nr_running;
 
 		if (cfs_rq_throttled(cfs_rq))
 			return 0;
@@ -5875,6 +5878,7 @@ static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 
 		cfs_rq->h_nr_runnable -= h_nr_runnable;
 		cfs_rq->h_nr_queued -= h_nr_queued;
+		cfs_rq->h_nr_running -= h_nr_running;
 
 		if (cfs_rq_throttled(cfs_rq))
 			return 0;
