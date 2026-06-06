@@ -24,7 +24,7 @@
 #include <linux/sched/energy.h>
 #include <linux/cpuset.h>
 
-DEFINE_PER_CPU(unsigned long, freq_scale) = SCHED_CAPACITY_SCALE;
+DEFINE_PER_CPU(unsigned long, arch_freq_scale) = SCHED_CAPACITY_SCALE;
 DEFINE_PER_CPU(unsigned long, efficiency) = SCHED_CAPACITY_SCALE;
 DEFINE_PER_CPU(unsigned long, max_cpu_freq);
 DEFINE_PER_CPU(unsigned long, max_freq_scale) = SCHED_CAPACITY_SCALE;
@@ -38,7 +38,7 @@ void arch_set_freq_scale(struct cpumask *cpus, unsigned long cur_freq,
 	scale = (cur_freq << SCHED_CAPACITY_SHIFT) / max_freq;
 
 	for_each_cpu(i, cpus) {
-		per_cpu(freq_scale, i) = scale;
+		per_cpu(arch_freq_scale, i) = scale;
 		per_cpu(max_cpu_freq, i) = max_freq;
 	}
 }
