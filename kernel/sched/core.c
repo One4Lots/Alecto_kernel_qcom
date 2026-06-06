@@ -4079,6 +4079,8 @@ void scheduler_tick(void)
 
 	rq_lock(rq, &rf);
 
+	topology_scale_freq_tick();
+
 	old_load = task_load(curr);
 	set_window_start(rq);
 	wallclock = sched_ktime_clock();

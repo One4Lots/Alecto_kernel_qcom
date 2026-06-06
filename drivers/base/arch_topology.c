@@ -25,9 +25,24 @@
 #include <linux/cpuset.h>
 
 DEFINE_PER_CPU(unsigned long, arch_freq_scale) = SCHED_CAPACITY_SCALE;
+EXPORT_PER_CPU_SYMBOL_GPL(arch_freq_scale);
+
 DEFINE_PER_CPU(unsigned long, efficiency) = SCHED_CAPACITY_SCALE;
 DEFINE_PER_CPU(unsigned long, max_cpu_freq);
 DEFINE_PER_CPU(unsigned long, max_freq_scale) = SCHED_CAPACITY_SCALE;
+
+/*
+ * topology_scale_freq_tick() - per-cpu tick hook for FIE counter sources.
+ *
+ * Called from scheduler_tick() on each CPU. Once
+ * topology_set_scale_freq_source() is available (next patch), registered
+ * sources will have their set_freq_scale() callback invoked here.
+ * Until then this is a no-op placeholder.
+ */
+void topology_scale_freq_tick(void)
+{
+}
+EXPORT_SYMBOL_GPL(topology_scale_freq_tick);
 
 void arch_set_freq_scale(struct cpumask *cpus, unsigned long cur_freq,
 			 unsigned long max_freq)
