@@ -5585,7 +5585,7 @@ static void hrtick_start_fair(struct rq *rq, struct task_struct *p)
 
 	SCHED_WARN_ON(task_rq(p) != rq);
 
-	if (rq->cfs.h_nr_running <= 1)
+	if (rq->cfs.h_nr_queued <= 1)
 		return;
 
 	/*
@@ -5677,7 +5677,7 @@ static inline void update_overutilized_status(struct rq *rq)
 /* Runqueue only has SCHED_IDLE tasks enqueued */
 static int sched_idle_rq(struct rq *rq)
 {
-	return unlikely(rq->nr_running == rq->cfs.h_nr_running &&
+	return unlikely(rq->nr_running == rq->cfs.h_nr_idle &&
 			rq->nr_running);
 }
 
@@ -5720,6 +5720,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	struct sched_entity *se = &p->se;
 	int task_new = !(flags & ENQUEUE_WAKEUP);
 	int h_nr_runnable = 1;
+	int h_nr_idle = task_has_idle_policy(p);
 
 #ifdef CONFIG_SCHED_WALT
 	p->misfit = !task_fits_max(p, rq->cpu);
@@ -5775,26 +5776,21 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 		/*
 		 * end evaluation on encountering a throttled cfs_rq
-		 *
-		 * note: in the case of encountering a throttled cfs_rq we will
-		 * post the final h_nr_running increment below.
 		 */
 		if (cfs_rq_throttled(cfs_rq))
 			break;
-		cfs_rq->h_nr_running++;
 		cfs_rq->h_nr_queued++;
 		cfs_rq->h_nr_runnable += h_nr_runnable;
-		walt_inc_cfs_rq_stats(cfs_rq, p);
+		cfs_rq->h_nr_idle += h_nr_idle;
 
 		flags = ENQUEUE_WAKEUP;
 	}
 
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
-		cfs_rq->h_nr_running++;
 		cfs_rq->h_nr_queued++;
 		cfs_rq->h_nr_runnable += h_nr_runnable;
-		walt_inc_cfs_rq_stats(cfs_rq, p);
+		cfs_rq->h_nr_idle += h_nr_idle;
 
 		if (cfs_rq_throttled(cfs_rq))
 			break;
@@ -5834,16 +5830,16 @@ static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 	bool task_sleep = flags & DEQUEUE_SLEEP;
 	bool task_delayed = flags & DEQUEUE_DELAYED;
 	struct task_struct *p = NULL;
+	int h_nr_idle = 0;
 	int h_nr_queued = 0;
 	int h_nr_runnable = 0;
-	int h_nr_running = 0;
 	struct cfs_rq *cfs_rq;
 	u64 slice = 0;
 
 	if (entity_is_task(se)) {
 		p = task_of(se);
 		h_nr_queued = 1;
-		h_nr_running = 1;
+		h_nr_idle = task_has_idle_policy(p);
 		if (task_sleep || task_delayed || !se->sched_delayed)
 			h_nr_runnable = 1;
 	}
@@ -5862,7 +5858,7 @@ static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 
 		cfs_rq->h_nr_runnable -= h_nr_runnable;
 		cfs_rq->h_nr_queued -= h_nr_queued;
-		cfs_rq->h_nr_running -= h_nr_running;
+		cfs_rq->h_nr_idle -= h_nr_idle;
 
 		if (cfs_rq_throttled(cfs_rq))
 			return 0;
@@ -5893,7 +5889,7 @@ static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 
 		cfs_rq->h_nr_runnable -= h_nr_runnable;
 		cfs_rq->h_nr_queued -= h_nr_queued;
-		cfs_rq->h_nr_running -= h_nr_running;
+		cfs_rq->h_nr_idle -= h_nr_idle;
 
 		if (cfs_rq_throttled(cfs_rq))
 			return 0;
@@ -6238,18 +6234,6 @@ static unsigned long target_load(int cpu, int type)
 		return total;
 
 	return max(rq->cpu_load[type-1], total);
-}
-
-static unsigned long cpu_avg_load_per_task(int cpu)
-{
-	struct rq *rq = cpu_rq(cpu);
-	unsigned long nr_running = READ_ONCE(rq->cfs.h_nr_running);
-	unsigned long load_avg = weighted_cpuload(rq);
-
-	if (nr_running)
-		return load_avg / nr_running;
-
-	return 0;
 }
 
 #ifndef CONFIG_SCHED_CASS
@@ -11465,21 +11449,10 @@ static int need_active_balance(struct lb_env *env)
 	if (imbalanced_active_balance(env))
 		return 1;
 
-	/*
-	 * The dst_cpu is idle and the src_cpu CPU has only 1 CFS task.
-	 * It's worth migrating the task if the src_cpu's capacity is reduced
-	 * because of other sched_class or IRQs if more capacity stays
-	 * available on dst_cpu.
-	 */
-	if (env->idle &&
-	    (env->src_rq->cfs.h_nr_running == 1) &&
-	    check_cpu_capacity(env->src_rq, sd))
+	if (env->migration_type == migrate_misfit)
 		return 1;
 
-	if (env->src_grp_type == group_misfit_task)
-		return 1;
-
-	return unlikely(sd->nr_balance_failed > sd->cache_nice_tries+2);
+	return 0;
 }
 
 static int group_balance_cpu_not_isolated(struct sched_group *sg)
