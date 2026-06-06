@@ -9903,14 +9903,7 @@ static void detach_task(struct task_struct *p, struct lb_env *env)
 
 	p->on_rq = TASK_ON_RQ_MIGRATING;
 	deactivate_task(env->src_rq, p, DEQUEUE_NOCLOCK);
-	if (p->se.sched_delayed)
-			clear_delayed(&p->se);
-	lockdep_off();
-	double_lock_balance(env->src_rq, env->dst_rq);
-	p->se.deadline = 0;
 	set_task_cpu(p, env->dst_cpu);
-	double_unlock_balance(env->src_rq, env->dst_rq);
-	lockdep_on();
 }
 
 /*
