@@ -5674,6 +5674,13 @@ static inline void update_overutilized_status(struct rq *rq)
 
 #endif /* CONFIG_SMP */
 
+/* Runqueue only has SCHED_IDLE tasks enqueued */
+static int sched_idle_rq(struct rq *rq)
+{
+	return unlikely(rq->nr_running == rq->cfs.h_nr_running &&
+			rq->nr_running);
+}
+
 static void
 requeue_delayed_entity(struct sched_entity *se)
 {
@@ -5823,6 +5830,7 @@ static void set_next_buddy(struct sched_entity *se);
  */
 static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 {
+	bool was_sched_idle = sched_idle_rq(rq);
 	bool task_sleep = flags & DEQUEUE_SLEEP;
 	bool task_delayed = flags & DEQUEUE_DELAYED;
 	struct task_struct *p = NULL;
@@ -5892,6 +5900,10 @@ static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 	}
 
 	sub_nr_running(rq, h_nr_queued);
+
+	/* balance early to pull high priority tasks */
+	if (unlikely(!was_sched_idle && sched_idle_rq(rq)))
+		rq->next_balance = jiffies;
 
 	if (p && task_delayed) {
 		SCHED_WARN_ON(!task_sleep);
@@ -12553,9 +12565,9 @@ static void nohz_idle_balance(struct rq *this_rq, enum cpu_idle_type idle)
 			rq_lock_irq(rq, &rf);
 			update_rq_clock(rq);
 			cpu_load_update_idle(rq);
+			__update_blocked_averages(rq); 
 			rq_unlock_irq(rq, &rf);
 
-			update_blocked_averages(balance_cpu);
 			/*
 			 * This idle load balance softirq may have been
 			 * triggered only to update the blocked load and shares
