@@ -9149,7 +9149,7 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
 {
 	enum preempt_wakeup_action preempt_action = PREEMPT_WAKEUP_PICK;
 	struct task_struct *curr = rq->curr;
-	struct sched_entity *se = &curr->se, *pse = &p->se;
+	struct sched_entity *nse, *se = &curr->se, *pse = &p->se;
 	struct cfs_rq *cfs_rq = task_cfs_rq(curr);
 
 	if (unlikely(se == pse))
@@ -9231,30 +9231,19 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
 		break;
 	}
 
-pick: {
-	struct sched_entity *nse;
+pick:
+        nse = pick_next_entity(rq, cfs_rq, preempt_action != PREEMPT_WAKEUP_SHORT);
+        /* If @p has become the most eligible task, force preemption */
+        if (nse == pse)
+                goto preempt;
 
-	nse = pick_next_entity(rq, cfs_rq, preempt_action != PREEMPT_WAKEUP_SHORT);
-	if (nse == pse)
-		goto preempt;
-
-	/*
-	 * nse == NULL means a delayed task was dequeued. If entities
-	 * remain queued, retry to check if pse surfaces as the pick.
-	 *
-	 * Only retry if a task was actually dequeued (indicated by
-	 * pick_next_entity returning NULL while pick_eevdf returned
-	 * something).
-	 */
-	if (!nse && cfs_rq->nr_queued) {
-		/*
-		 * If pick_eevdf() itself returned NULL, then no task is
-		 * eligible and we shouldn't loop.
-		 */
-		if (pick_eevdf(cfs_rq, preempt_action != PREEMPT_WAKEUP_SHORT))
-			goto pick;
-	}
-}
+        /*
+         * Because p is enqueued, nse being null can only mean that we
+         * dequeued a delayed task. If there are still entities queued in
+         * cfs, check if the next one will be p.
+         */
+        if (!nse && cfs_rq->nr_queued)
+                goto pick;
 
 	if (sched_feat(RUN_TO_PARITY))
 		update_protect_slice(cfs_rq, se);
