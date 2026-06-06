@@ -4,6 +4,14 @@
  */
 #include "sched.h"
 
+/*
+ * Stub for mainline's EAS-aware domain rebuild. 
+ */
+static inline void rebuild_sched_domains_energy(void)
+{
+	rebuild_sched_domains();
+}
+
 DEFINE_MUTEX(sched_domains_mutex);
 
 /* Protected by sched_domains_mutex: */
