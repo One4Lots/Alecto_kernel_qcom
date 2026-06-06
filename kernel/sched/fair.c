@@ -4963,7 +4963,8 @@ static void throttle_cfs_rq(struct cfs_rq *cfs_rq)
 	walk_tg_tree_from(cfs_rq->tg, tg_throttle_down, tg_nop, (void *)rq);
 	rcu_read_unlock();
 
-	task_delta = cfs_rq->h_nr_running;
+	task_delta = cfs_rq->h_nr_queued;
+	idle_delta = cfs_rq->h_nr_idle;
 	for_each_sched_entity(se) {
 		struct cfs_rq *qcfs_rq = cfs_rq_of(se);
 		/* throttled entity or throttle-on-deactivate */
@@ -4972,7 +4973,8 @@ static void throttle_cfs_rq(struct cfs_rq *cfs_rq)
 
 		if (dequeue)
 			dequeue_entity(qcfs_rq, se, DEQUEUE_SLEEP);
-		qcfs_rq->h_nr_running -= task_delta;
+		qcfs_rq->h_nr_queued -= task_delta;
+		qcfs_rq->h_nr_idle -= idle_delta;
 		walt_dec_throttled_cfs_rq_stats(&qcfs_rq->walt_stats, cfs_rq);
 
 		if (qcfs_rq->load.weight)
@@ -5015,7 +5017,7 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 	struct cfs_bandwidth *cfs_b = tg_cfs_bandwidth(cfs_rq->tg);
 	struct sched_entity *se;
 	int enqueue = 1;
-	long task_delta;
+	long task_delta, idle_delta;
 	struct cfs_rq *tcfs_rq __maybe_unused = cfs_rq;
 
 	se = cfs_rq->tg->se[cpu_of(rq)];
@@ -5035,7 +5037,8 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 	if (!cfs_rq->load.weight)
 		return;
 
-	task_delta = cfs_rq->h_nr_running;
+	task_delta = cfs_rq->h_nr_queued;
+	idle_delta = cfs_rq->h_nr_idle;
 	for_each_sched_entity(se) {
 		if (se->on_rq)
 			enqueue = 0;
@@ -5043,7 +5046,8 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 		cfs_rq = cfs_rq_of(se);
 		if (enqueue)
 			enqueue_entity(cfs_rq, se, ENQUEUE_WAKEUP);
-		cfs_rq->h_nr_running += task_delta;
+		cfs_rq->h_nr_queued += task_delta;
+		cfs_rq->h_nr_idle += idle_delta;
 		walt_inc_throttled_cfs_rq_stats(&cfs_rq->walt_stats, tcfs_rq);
 
 		if (cfs_rq_throttled(cfs_rq))
@@ -12644,7 +12648,7 @@ static inline bool nohz_kick_needed(struct rq *rq, bool only_update)
 
 	sd = rcu_dereference(rq->sd);
 	if (sd) {
-		if ((rq->cfs.h_nr_running >= 1) &&
+		if ((rq->cfs.h_nr_runnable >= 1) &&
 				check_cpu_capacity(rq, sd)) {
 			kick = true;
 			goto unlock;
