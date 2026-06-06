@@ -248,6 +248,10 @@ static inline int idle_policy(int policy)
 {
 	return policy == SCHED_IDLE;
 }
+static inline int task_has_idle_policy(struct task_struct *p)
+{
+	return idle_policy(p->policy);
+}
 static inline int fair_policy(int policy)
 {
 	return policy == SCHED_NORMAL || policy == SCHED_BATCH;
