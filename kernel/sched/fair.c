@@ -9068,7 +9068,21 @@ static void migrate_task_rq_fair(struct task_struct *p)
 
 static void task_dead_fair(struct task_struct *p)
 {
-	remove_entity_load_avg(&p->se);
+    struct sched_entity *se = &p->se;
+
+    if (se->sched_delayed) {
+        struct rq_flags rf;
+        struct rq *rq;
+
+        rq = task_rq_lock(p, &rf);
+        if (se->sched_delayed) {
+            update_rq_clock(rq);
+            dequeue_entities(rq, se, DEQUEUE_SLEEP | DEQUEUE_DELAYED);
+        }
+        task_rq_unlock(rq, p, &rf);
+    }
+
+    remove_entity_load_avg(se);
 }
 #endif /* CONFIG_SMP */
 
