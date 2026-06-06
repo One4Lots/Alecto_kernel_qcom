@@ -19,6 +19,15 @@
 #include <linux/spinlock.h>
 #include <linux/sysfs.h>
 
+/*
+ * Returns true if the active cpufreq driver natively provides
+ * frequency-invariance via arch_set_freq_scale().
+ */
+static inline bool cpufreq_supports_freq_invariance(void)
+{
+	return false;
+}
+
 /*********************************************************************
  *                        CPUFREQ INTERFACE                          *
  *********************************************************************/
