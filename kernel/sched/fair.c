@@ -9843,6 +9843,7 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 	/* Record that we found atleast one task that could run on dst_cpu */
 	env->flags &= ~LBF_ALL_PINNED;
 
+#ifdef CONFIG_SCHED_WALT
 	if (energy_aware() && !sd_overutilized(env->sd) &&
 	    env->idle == CPU_NEWLY_IDLE &&
 	    !task_in_related_thread_group(p)) {
@@ -9857,7 +9858,6 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 			return 0;
 	}
 
-#ifdef CONFIG_SCHED_WALT
 	if (env->flags & LBF_IGNORE_PREFERRED_CLUSTER_TASKS &&
 			 !preferred_cluster(cpu_rq(env->dst_cpu)->cluster, p))
 		return 0;
@@ -9866,6 +9866,11 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 	if (env->flags & LBF_IGNORE_BIG_TASKS &&
 		!task_fits_max(p, env->dst_cpu))
 		return 0;
+
+	/* Don't detach task if it is under active migration */
+	if (env->src_rq->push_task == p)
+		return 0;
+
 #endif
 
 	if (task_running(env->src_rq, p)) {
@@ -9873,9 +9878,14 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 		return 0;
 	}
 
-	/* Don't detach task if it is under active migration */
-	if (env->src_rq->push_task == p)
-		return 0;
+	/*
+	 * Aggressive migration if:
+	 * 1) active balance
+	 * 2) IDLE or NEWLY_IDLE balance.
+	 * 3) destination numa is preferred
+	 * 4) task is cache cold, or
+	 * 5) too many balance attempts have failed.
+	 */
 
 	if (env->flags & LBF_ACTIVE_LB)
 		return 1;
