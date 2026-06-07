@@ -133,6 +133,22 @@ int __weak arch_asym_cpu_priority(int cpu)
 {
 	return -arch_scale_cpu_capacity(cpu);
 }
+
+/*
+ * The margin used when comparing CPU capacities.
+ * is 'cap1' noticeably greater than 'cap2'
+ *
+ * (default: ~5%)
+ */
+#define capacity_greater(cap1, cap2) ((cap1) * 1024 > (cap2) * 1078)
+
+/*
+ * The margin used when comparing utilization with CPU capacity.
+ *
+ * (default: ~20%)
+ */
+#define fits_capacity(cap, max)	((cap) * 1280 < (max) * 1024)
+
 #endif
 
 #ifdef CONFIG_CFS_BANDWIDTH
@@ -5734,6 +5750,17 @@ static int sched_idle_rq(struct rq *rq)
 			rq->nr_running);
 }
 
+static int choose_sched_idle_rq(struct rq *rq, struct task_struct *p)
+{
+	return sched_idle_rq(rq) && !task_has_idle_policy(p);
+}
+
+static int choose_idle_cpu(int cpu, struct task_struct *p)
+{
+	return available_idle_cpu(cpu) ||
+	       choose_sched_idle_rq(cpu_rq(cpu), p);
+}
+
 static void
 requeue_delayed_entity(struct sched_entity *se)
 {
@@ -8309,10 +8336,6 @@ static int wake_cap(struct task_struct *p, int cpu, int prev_cpu)
 	return !task_fits_max(p, cpu);
 }
 #endif /* CONFIG_SCHED_CASS */
-
-#ifndef fits_capacity
-#define fits_capacity(util, cap) ((util) <= (cap))
-#endif
 
 static inline int util_fits_cpu(unsigned long util,
 				unsigned long uclamp_min,
