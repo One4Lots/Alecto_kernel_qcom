@@ -165,6 +165,7 @@ int __weak arch_asym_cpu_priority(int cpu)
 unsigned int sysctl_sched_cfs_bandwidth_slice		= 5000UL;
 #endif
 
+#ifdef CONFIG_SCHED_WALT
 /*
  * The margin used when comparing utilization with CPU capacity:
  * util * margin < capacity * 1024
@@ -183,7 +184,6 @@ unsigned int sched_capacity_margin_up[NR_CPUS] = {
 unsigned int sched_capacity_margin_down[NR_CPUS] = {
 			[0 ... NR_CPUS-1] = 2844}; /* ~64% margin */
 
-#ifdef CONFIG_SCHED_WALT
 /* 1ms default for 20ms window size scaled to 1024 */
 unsigned int sysctl_sched_min_task_util_for_boost = 51;
 /* 0.68ms default for 20ms window size scaled to 1024 */
@@ -254,6 +254,7 @@ void sched_init_granularity(void)
 	update_sysctl();
 }
 
+#ifndef CONFIG_64BIT
 #define WMULT_CONST	(~0U)
 #define WMULT_SHIFT	32
 
@@ -289,27 +290,36 @@ static void __update_inv_weight(struct load_weight *lw)
 static u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight *lw)
 {
 	u64 fact = scale_load_down(weight);
+	u32 fact_hi = (u32)(fact >> 32);
 	int shift = WMULT_SHIFT;
+	int fs;
 
 	__update_inv_weight(lw);
 
-	if (unlikely(fact >> 32)) {
-		while (fact >> 32) {
-			fact >>= 1;
-			shift--;
-		}
+	if (unlikely(fact_hi)) {
+		fs = fls(fact_hi);
+		shift -= fs;
+		fact >>= fs;
 	}
 
 	/* hint to use a 32x32->64 mul */
 	fact = (u64)(u32)fact * lw->inv_weight;
 
-	while (fact >> 32) {
-		fact >>= 1;
-		shift--;
+	fact_hi = (u32)(fact >> 32);
+	if (fact_hi) {
+		fs = fls(fact_hi);
+		shift -= fs;
+		fact >>= fs;
 	}
 
 	return mul_u64_u32_shr(delta_exec, fact, shift);
 }
+#else
+static u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight *lw)
+{
+	return (delta_exec * weight) / lw->weight;
+}
+#endif
 
 /*
  * delta /= w
@@ -329,10 +339,6 @@ const struct sched_class fair_sched_class;
  */
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
-
-/* An entity is a task if it doesn't "own" a runqueue */
-
-
 static inline struct task_struct *task_of(struct sched_entity *se)
 {
 	SCHED_WARN_ON(!entity_is_task(se));
@@ -859,11 +865,6 @@ int entity_eligible(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		return 1;
 
 	return vruntime_eligible(cfs_rq, se->vruntime);
-}
-
-static void update_min_vruntime(struct cfs_rq *cfs_rq)
-{
-	/* zero_vruntime is updated by avg_vruntime() */
 }
 
 #define deadline_gt(field, lse, rse) ({ (s64)((lse)->field - (rse)->field) > 0; })
@@ -4236,9 +4237,6 @@ static inline unsigned long task_runnable(struct task_struct *p)
 {
 	return READ_ONCE(p->se.avg.runnable_avg);
 }
-
-static inline bool task_fits_capacity(struct task_struct *p, long capacity,
-								int cpu);
 
 static inline void update_misfit_status(struct task_struct *p, struct rq *rq)
 {
@@ -7718,7 +7716,6 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 
 	return select_idle_sibling_cstate_aware(p, prev, target);
 }
-#endif /* CONFIG_SCHED_CASS */
 
 static inline bool task_fits_capacity(struct task_struct *p,
 					long capacity,
@@ -7733,9 +7730,11 @@ static inline bool task_fits_capacity(struct task_struct *p,
 
 	return capacity * 1024 > boosted_task_util(p) * margin;
 }
+#endif /* CONFIG_SCHED_CASS */
 
 static inline bool task_fits_max(struct task_struct *p, int cpu)
 {
+#ifdef CONFIG_SCHED_WALT
 	unsigned long capacity = capacity_orig_of(cpu);
 	unsigned long max_capacity = cpu_rq(cpu)->rd->max_cpu_capacity.val;
 
@@ -7748,6 +7747,9 @@ static inline bool task_fits_max(struct task_struct *p, int cpu)
 	}
 
 	return task_fits_capacity(p, capacity_of(cpu), cpu);
+#else
+	return false;
+#endif
 }
 
 struct find_best_target_env {
@@ -8372,12 +8374,6 @@ static inline int task_fits_cpu(struct task_struct *p, int cpu)
 	unsigned long util = task_util_est(p);
 
 	return (util_fits_cpu(util, uclamp_min, uclamp_max, cpu) > 0);
-}
-
-bool __cpu_overutilized(int cpu, int delta)
-{
-	return (capacity_orig_of(cpu) * 1024) <
-		((cpu_util(cpu) + delta) * sched_capacity_margin_up[cpu]);
 }
 
 bool cpu_overutilized(int cpu)
@@ -10490,30 +10486,6 @@ group_is_overloaded(unsigned int imbalance_pct, struct sg_lb_stats *sgs)
 		return true;
 
 	return false;
-}
-
-/*
- * group_smaller_min_cpu_capacity: Returns true if sched_group sg has smaller
- * per-CPU capacity than sched_group ref.
- */
-static inline bool
-group_smaller_min_cpu_capacity(struct sched_group *sg, struct sched_group *ref)
-{
-	return sg->sgc->min_capacity *
-				sched_capacity_margin_up[group_first_cpu(sg)] <
-						ref->sgc->min_capacity * 1024;
-}
-
-/*
- * group_smaller_max_cpu_capacity: Returns true if sched_group sg has smaller
- * per-CPU capacity_orig than sched_group ref.
- */
-static inline bool
-group_smaller_max_cpu_capacity(struct sched_group *sg, struct sched_group *ref)
-{
-	return sg->sgc->max_capacity *
-				sched_capacity_margin_up[group_first_cpu(sg)] <
-						ref->sgc->max_capacity * 1024;
 }
 
 static inline unsigned long cpu_load(struct rq *rq)
@@ -13478,36 +13450,6 @@ kick_active_balance(struct rq *rq, struct task_struct *p, int new_cpu)
 
 	return rc;
 }
-
-static int __init sched_capacity_margin_init(void)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu) {
-		if (cpu < 4) {
-			/*
-			 * Silver (299 capacity): use minimal up-margin so
-			 * tasks stay on Silver until they genuinely saturate
-			 * it. The 3x capacity gap to Gold means even a task
-			 * at 95% Silver util is tiny on Gold — no benefit to
-			 * early escalation.
-			 */
-			sched_capacity_margin_up[cpu] = 1025; /* ~0.5% */
-		} else if (cpu < 7) {
-			/*
-			 * Gold (899 capacity): keep default. Gap to Prime
-			 * is small (899→1024), tighter margin is fine.
-			 */
-			sched_capacity_margin_up[cpu] = 1078;
-		} else {
-			/* Prime always returns true via max_capacity check */
-			sched_capacity_margin_up[cpu] = 1078;
-		}
-	}
-
-	return 0;
-}
-late_initcall(sched_capacity_margin_init);
 
 #ifdef CONFIG_SCHED_WALT
 struct walt_rotate_work {
