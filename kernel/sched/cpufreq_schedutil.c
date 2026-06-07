@@ -226,7 +226,7 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 		return;
 	}
 
-	util = util_cfs + cpu_util_rt(sg_cpu->cpu) + READ_ONCE(rq->avg_dl.util_avg);
+	util = util_cfs + cpu_util_rt(rq) + READ_ONCE(rq->avg_dl.util_avg);
 	uclamp_min = uclamp_rq_get(rq, UCLAMP_MIN);
 	uclamp_min = uclamp_min * max >> SCHED_CAPACITY_SHIFT;
 	min = max(cpu_bw_dl(rq), uclamp_min);

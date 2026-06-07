@@ -2411,15 +2411,9 @@ cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
 
 #else
 
-static inline unsigned long cpu_util_rt(int cpu)
+static inline unsigned long cpu_util_rt(struct rq *rq)
 {
-	return cpu_rq(cpu)->avg_rt.util_avg;
-}
-
-static inline unsigned long
-cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
-{
-	return min(cpu_util(cpu) + cpu_util_rt(cpu), capacity_orig_of(cpu));
+	return READ_ONCE(rq->avg_rt.util_avg);
 }
 
 #define sched_ravg_window TICK_NSEC
