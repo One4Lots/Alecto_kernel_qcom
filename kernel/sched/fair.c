@@ -3160,6 +3160,38 @@ void task_tick_numa(struct rq *rq, struct task_struct *curr)
 	}
 }
 
+static void update_scan_period(struct task_struct *p, int new_cpu)
+{
+	int src_nid = cpu_to_node(task_cpu(p));
+	int dst_nid = cpu_to_node(new_cpu);
+
+	if (!static_branch_likely(&sched_numa_balancing))
+		return;
+
+	if (!p->mm || !p->numa_faults || (p->flags & PF_EXITING))
+		return;
+
+	if (src_nid == dst_nid)
+		return;
+
+	/*
+	 * Allow resets if faults have been trapped before one scan
+	 * has completed. This is most likely due to a new task that
+	 * is pulled cross-node due to wakeups or load balancing.
+	 */
+	if (p->numa_scan_seq) {
+		/*
+		 * Avoid scan adjustments if moving to the preferred
+		 * node or if the task was not previously running on
+		 * the preferred node.
+		 */
+		if (dst_nid == p->numa_preferred_nid ||
+		    (p->numa_preferred_nid != -1 && src_nid != p->numa_preferred_nid))
+			return;
+	}
+
+	p->numa_scan_period = task_scan_start(p);
+}
 #else
 static void task_tick_numa(struct rq *rq, struct task_struct *curr)
 {
@@ -3173,6 +3205,9 @@ static inline void account_numa_dequeue(struct rq *rq, struct task_struct *p)
 {
 }
 
+static inline void update_scan_period(struct task_struct *p, int new_cpu)
+{
+}
 #endif /* CONFIG_NUMA_BALANCING */
 
 static void
@@ -4506,36 +4541,10 @@ static inline void check_schedstat_required(void)
 #endif
 }
 
+static inline bool cfs_bandwidth_used(void);
 
-/*
- * MIGRATION
- *
- *	dequeue
- *	  update_curr()
- *	    update_min_vruntime()
- *	  vruntime -= min_vruntime
- *
- *	enqueue
- *	  update_curr()
- *	    update_min_vruntime()
- *	  vruntime += min_vruntime
- *
- * this way the vruntime transition between RQs is done when both
- * min_vruntime are up-to-date.
- *
- * WAKEUP (remote)
- *
- *	->migrate_task_rq_fair() (p->state == TASK_WAKING)
- *	  vruntime -= min_vruntime
- *
- *	enqueue
- *	  update_curr()
- *	    update_min_vruntime()
- *	  vruntime += min_vruntime
- *
- * this way we don't have the most up-to-date min_vruntime on the originating
- * CPU and an up-to-date min_vruntime on the destination CPU.
- */
+static void
+requeue_delayed_entity(struct sched_entity *se);
 
 static void
 enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
@@ -8889,38 +8898,30 @@ pick_cpu:
  * cfs_rq_of(p) references at time of call are still valid and identify the
  * previous cpu. The caller guarantees p->pi_lock or task_rq(p)->lock is held.
  */
-static void migrate_task_rq_fair(struct task_struct *p)
+static void migrate_task_rq_fair(struct task_struct *p, int new_cpu)
 {
 	struct sched_entity *se = &p->se;
 
-	/*
-	 * Reset the deadline on wakeup-migration so that place_entity()
-	 * on the destination rq gives the task a fresh EEVDF deadline
-	 * rather than keeping a stale one from the source rq's timeline.
-	 */
-	if (p->state == TASK_WAKING) {
-		se->deadline = 0;
-	}
-
-	/*
-	 * Only remove PELT contribution when the task is not actively
-	 * migrating (TASK_ON_RQ_MIGRATING). During active migration the
-	 * entity is still enqueued on the source rq; dequeue_entity()
-	 * will call remove_entity_load_avg() there. Calling it here too
-	 * would double-subtract and corrupt cfs_rq->avg.
-	 */
 	if (!task_on_rq_migrating(p)) {
 		remove_entity_load_avg(se);
 
 		/*
-		 * Estimate missing idle decay so PELT doesn't inflate
-		 * utilization on the destination CPU after migration.
+		 * Here, the task's PELT values have been updated according to
+		 * the current rq's clock. But if that clock hasn't been
+		 * updated in a while, a substantial idle time will be missed,
+		 * leading to an inflation after wake-up on the new rq.
+		 *
+		 * Estimate the missing time from the cfs_rq last_update_time
+		 * and update sched_avg to improve the PELT continuity after
+		 * migration.
 		 */
 		migrate_se_pelt_lag(se);
 	}
 
 	/* Tell new CPU we are migrated */
 	se->avg.last_update_time = 0;
+
+	update_scan_period(p, new_cpu);
 }
 
 static void task_dead_fair(struct task_struct *p)
