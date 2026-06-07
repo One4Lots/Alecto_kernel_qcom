@@ -9,15 +9,6 @@
 #include <linux/sched.h>
 #include <linux/cpuidle.h>
 
-static inline unsigned long cpu_util_dl(struct rq *rq)
-{
-#ifdef CONFIG_SMP
-    return READ_ONCE(rq->avg_dl.util_avg);
-#else
-    return 0;
-#endif
-}
-
 #ifndef fits_capacity
 inline bool fits_capacity(unsigned long util, unsigned long capacity)
 {

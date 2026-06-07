@@ -2184,14 +2184,14 @@ extern void deactivate_task(struct rq *rq, struct task_struct *p, int flags);
 
 extern void check_preempt_curr(struct rq *rq, struct task_struct *p, int flags);
 
-extern const_debug unsigned int sysctl_sched_time_avg;
+#ifdef CONFIG_PREEMPT_RT
+#define SCHED_NR_MIGRATE_BREAK 8
+#else
+#define SCHED_NR_MIGRATE_BREAK 32
+#endif
+
 extern const_debug unsigned int sysctl_sched_nr_migrate;
 extern const_debug unsigned int sysctl_sched_migration_cost;
-
-static inline u64 sched_avg_period(void)
-{
-	return (u64)sysctl_sched_time_avg * NSEC_PER_MSEC / 2;
-}
 
 extern unsigned int sysctl_sched_base_slice;
 #ifdef CONFIG_SCHED_HRTICK
@@ -2231,7 +2231,6 @@ static inline u64 sched_ktime_clock(void)
 #endif
 
 #ifdef CONFIG_SMP
-extern void sched_avg_update(struct rq *rq);
 extern unsigned long sched_get_rt_rq_util(int cpu);
 
 #ifndef arch_scale_freq_capacity
@@ -2419,6 +2418,15 @@ cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
 
 #else
 
+static inline unsigned long cpu_util_dl(struct rq *rq)
+{
+#ifdef CONFIG_SMP
+    return READ_ONCE(rq->avg_dl.util_avg);
+#else
+    return 0;
+#endif
+}
+
 static inline unsigned long cpu_util_rt(struct rq *rq)
 {
 	return READ_ONCE(rq->avg_rt.util_avg);
@@ -2470,15 +2478,7 @@ add_capacity_margin(unsigned long cpu_capacity, int cpu)
 }
 
 #endif /* CONFIG_SMP */
-
-static inline void sched_rt_avg_update(struct rq *rq, u64 rt_delta)
-{
-	rq->rt_avg += rt_delta * arch_scale_freq_capacity(cpu_of(rq));
-	sched_avg_update(rq);
-}
 #else
-static inline void sched_rt_avg_update(struct rq *rq, u64 rt_delta) { }
-static inline void sched_avg_update(struct rq *rq) { }
 #endif
 
 #ifdef CONFIG_SMP
