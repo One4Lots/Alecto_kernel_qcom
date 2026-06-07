@@ -4057,8 +4057,6 @@ unsigned long long task_sched_runtime(struct task_struct *p)
 	return ns;
 }
 
-unsigned int capacity_margin_freq = 1280; /* ~20% margin */
-
 /*
  * This function gets called by the timer code, with HZ frequency.
  * We call it with interrupts disabled.
@@ -4069,10 +4067,12 @@ void scheduler_tick(void)
 	struct rq *rq = cpu_rq(cpu);
 	struct task_struct *curr = rq->curr;
 	struct rq_flags rf;
+#ifdef CONFIG_SCHED_WALT
 	u64 wallclock;
 	bool early_notif;
 	u32 old_load;
 	struct related_thread_group *grp;
+#endif
 	unsigned int flag = 0;
 
 	sched_clock_tick();
@@ -4080,21 +4080,24 @@ void scheduler_tick(void)
 	rq_lock(rq, &rf);
 
 	topology_scale_freq_tick();
-
+#ifdef CONFIG_SCHED_WALT
 	old_load = task_load(curr);
 	set_window_start(rq);
 	wallclock = sched_ktime_clock();
 	update_task_ravg(rq->curr, rq, TASK_UPDATE, wallclock, 0);
+#endif
 	update_rq_clock(rq);
 	curr->sched_class->task_tick(rq, curr, 0);
 	// cpu_load_update_active(rq);
 	calc_global_load_tick(rq);
 
+#ifdef CONFIG_SCHED_WALT
 	early_notif = early_detection_notify(rq, wallclock);
 	if (early_notif)
 		flag = SCHED_CPUFREQ_WALT | SCHED_CPUFREQ_EARLY_DET;
 
 	cpufreq_update_util(rq, flag);
+#endif
 	rq_unlock(rq, &rf);
 
 	perf_event_task_tick();
@@ -4143,11 +4146,6 @@ u64 scheduler_tick_max_deferment(void)
 
 #if defined(CONFIG_PREEMPT) && (defined(CONFIG_DEBUG_PREEMPT) || \
 				defined(CONFIG_PREEMPT_TRACER))
-/*
- * preemptoff stack tracing threshold in ns.
- * default: 1ms
- */
-unsigned int sysctl_preemptoff_tracing_threshold_ns = 1000000UL;
 
 struct preempt_store {
 	u64 ts;
@@ -4162,20 +4160,11 @@ DEFINE_PER_CPU(struct preempt_store, the_ps);
  */
 static inline void preempt_latency_start(int val)
 {
-	struct preempt_store *ps = &per_cpu(the_ps, raw_smp_processor_id());
-
 	if (preempt_count() == val) {
 		unsigned long ip = get_lock_parent_ip();
 #ifdef CONFIG_DEBUG_PREEMPT
 		current->preempt_disable_ip = ip;
 #endif
-		ps->ts = sched_clock();
-		ps->caddr[0] = CALLER_ADDR0;
-		ps->caddr[1] = CALLER_ADDR1;
-		ps->caddr[2] = CALLER_ADDR2;
-		ps->caddr[3] = CALLER_ADDR3;
-		ps->irqs_disabled = irqs_disabled();
-
 		trace_preempt_off(CALLER_ADDR0, ip);
 	}
 }
@@ -4209,18 +4198,6 @@ NOKPROBE_SYMBOL(preempt_count_add);
 static inline void preempt_latency_stop(int val)
 {
 	if (preempt_count() == val) {
-		struct preempt_store *ps = &per_cpu(the_ps,
-				raw_smp_processor_id());
-		u64 delta = sched_clock() - ps->ts;
-
-		/*
-		 * Trace preempt disable stack if preemption
-		 * is disabled for more than the threshold.
-		 */
-		if (delta > sysctl_preemptoff_tracing_threshold_ns)
-			trace_sched_preempt_disable(delta, ps->irqs_disabled,
-						ps->caddr[0], ps->caddr[1],
-						ps->caddr[2], ps->caddr[3]);
 		trace_preempt_on(CALLER_ADDR0, get_lock_parent_ip());
 	}
 }
@@ -4405,8 +4382,9 @@ static void __sched notrace __schedule(bool preempt)
 	struct rq_flags rf;
 	struct rq *rq;
 	int cpu;
+#ifdef CONFIG_SCHED_WALT
 	u64 wallclock;
-
+#endif
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
 	prev = rq->curr;
@@ -4477,9 +4455,11 @@ static void __sched notrace __schedule(bool preempt)
 	next = pick_next_task(rq, prev, &rf);
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
-
+#ifdef CONFIG_SCHED_WALT
 	wallclock = sched_ktime_clock();
+#endif
 	if (likely(prev != next)) {
+#ifdef CONFIG_SCHED_WALT
 		if (!prev->on_rq)
 			prev->last_sleep_ts = wallclock;
 
@@ -4489,6 +4469,7 @@ static void __sched notrace __schedule(bool preempt)
 
 		update_task_ravg(prev, rq, PUT_PREV_TASK, wallclock, 0);
 		update_task_ravg(next, rq, PICK_NEXT_TASK, wallclock, 0);
+#endif
 		rq->nr_switches++;
 		rq->curr = next;
 		/*
@@ -4515,7 +4496,9 @@ static void __sched notrace __schedule(bool preempt)
 		/* Also unlocks the rq: */
 		rq = context_switch(rq, prev, next, &rf);
 	} else {
+#ifdef CONFIG_SCHED_WALT
 		update_task_ravg(prev, rq, TASK_UPDATE, wallclock, 0);
+#endif
 		rq->clock_update_flags &= ~(RQCF_ACT_SKIP|RQCF_REQ_SKIP);
 		rq_unlock_irq(rq, &rf);
 	}
