@@ -166,7 +166,7 @@ done:
 static int cass_best_cpu(struct task_struct *p, int prev_cpu, bool sync, bool rt)
 {
 	/* Initialize @best such that @best always has a valid CPU at the end */
-	struct cass_cpu_cand cands[2] = { [0 ... 1] = { .cpu = prev_cpu, .cap_max = 0 } }, *best = cands;
+	struct cass_cpu_cand cands[2], *best = cands;
 	int this_cpu = raw_smp_processor_id();
 	unsigned long p_util, uc_min;
 	bool has_idle = false;
@@ -190,8 +190,7 @@ static int cass_best_cpu(struct task_struct *p, int prev_cpu, bool sync, bool rt
 	 * the check entirely, avoiding unnecessary per_cpu() reads in the hot-path.
 	 */
 	/* Use rcu_dereference_sched since we're in a non-preemptible sched context */
-	if ((unsigned int)prev_cpu >= nr_cpu_ids ||
-	    unlikely(!rcu_dereference_sched(per_cpu(sd_llc, prev_cpu))) ||
+	if (unlikely(!rcu_dereference_sched(per_cpu(sd_llc, prev_cpu))) ||
 	    per_cpu(sd_llc_size, prev_cpu) >= nr_cpu_ids)
 		prev_llc_id = -1;
 	else
