@@ -867,6 +867,7 @@ struct root_domain {
 	 * - Running task is misfit
 	 */
 	int overload;
+	int overutilized;
 
 	/*
 	 * The bit corresponding to a CPU gets set here if such CPU has more
@@ -900,10 +901,17 @@ struct root_domain {
 	/* Maximum cpu capacity in the system. */
 	struct max_cpu_capacity max_cpu_capacity;
 
+	/*
+	 * NULL-terminated list of performance domains intersecting with the
+	 * CPUs of the rd. Protected by RCU.
+	 */
+	struct perf_domain	*pd;
+#ifdef CONFIG_SCHED_WALT
 	/* First cpu with maximum and minimum original capacity */
 	int max_cap_orig_cpu, min_cap_orig_cpu;
 	/* First cpu with mid capacity */
 	int mid_cap_orig_cpu;
+#endif
 };
 
 extern struct root_domain def_root_domain;
