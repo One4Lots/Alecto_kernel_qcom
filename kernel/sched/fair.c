@@ -8354,7 +8354,7 @@ static inline int util_fits_cpu(unsigned long util,
 		return fits;
 
 	capacity_orig = capacity_orig_of(cpu);
-	capacity_orig_thermal = capacity_orig; /* FIXME: thermal_load_avg */
+	capacity_orig_thermal = capacity_orig - thermal_load_avg(cpu_rq(cpu));
 
 	uclamp_max_fits = (capacity_orig == SCHED_CAPACITY_SCALE) && (uclamp_max == SCHED_CAPACITY_SCALE);
 	uclamp_max_fits = !uclamp_max_fits && (uclamp_max <= capacity_orig);
