@@ -39,6 +39,7 @@
 #include <linux/sched/signal.h>
 #include <linux/sched/debug.h>
 #include <linux/atomic.h>
+#include <linux/sched/isolation.h>
 #include <linux/bitops.h>
 #include <linux/percpu.h>
 #include <linux/notifier.h>

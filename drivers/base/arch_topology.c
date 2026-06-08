@@ -318,45 +318,6 @@ done:
 	return flags_changed;
 }
 
-int topology_smt_flags(void)
-{
-	int flags = 0;
-
-	if (asym_cpucap == asym_thread)
-		flags |= SD_ASYM_CPUCAPACITY;
-
-	if (share_cap >= share_cap_thread)
-		flags |= SD_SHARE_CAP_STATES;
-
-	return flags;
-}
-
-int topology_core_flags(void)
-{
-	int flags = 0;
-
-	if (asym_cpucap == asym_core)
-		flags |= SD_ASYM_CPUCAPACITY;
-
-	if (share_cap >= share_cap_core)
-		flags |= SD_SHARE_CAP_STATES;
-
-	return flags;
-}
-
-int topology_cpu_flags(void)
-{
-	int flags = 0;
-
-	if (asym_cpucap == asym_die)
-		flags |= SD_ASYM_CPUCAPACITY;
-
-	if (share_cap >= share_cap_die)
-		flags |= SD_SHARE_CAP_STATES;
-
-	return flags;
-}
-
 static int update_topology = 0;
 
 int topology_update_cpu_topology(void)

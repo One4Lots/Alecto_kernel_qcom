@@ -34,4 +34,5 @@ obj-$(CONFIG_MEMBARRIER) += membarrier.o
 ifndef CONFIG_SCHED_CORE_CTL
 obj-$(CONFIG_SCHED_WALT) += rotation_ctl.o
 endif
+obj-$(CONFIG_CPU_ISOLATION) += isolation.o
 obj-$(CONFIG_PSI) += psi.o

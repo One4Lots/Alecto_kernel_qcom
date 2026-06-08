@@ -13,6 +13,7 @@
 #include <linux/sched/hotplug.h>
 #include <linux/sched/idle.h>
 #include <linux/sched/init.h>
+#include <linux/sched/isolation.h>
 #include <linux/sched/jobctl.h>
 #include <linux/sched/loadavg.h>
 #include <linux/sched/mm.h>
@@ -169,6 +170,20 @@ extern atomic_long_t calc_load_tasks;
 
 extern void calc_global_load_tick(struct rq *this_rq);
 extern long calc_load_fold_active(struct rq *this_rq, long adjust);
+
+/*
+ * Asymmetric CPU capacity bits
+ */
+struct asym_cap_data {
+	struct list_head link;
+	struct rcu_head rcu;
+	unsigned long capacity;
+	unsigned long cpus[];
+};
+
+extern struct list_head asym_cap_list;
+
+#define cpu_capacity_span(asym_data) to_cpumask((asym_data)->cpus)
 
 #ifdef CONFIG_SMP
 extern void cpu_load_update_active(struct rq *this_rq);
