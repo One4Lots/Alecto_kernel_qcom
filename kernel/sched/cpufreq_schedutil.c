@@ -124,12 +124,16 @@ static void sugov_deferred_update(struct sugov_policy *sg_policy)
 
 static unsigned int sugov_get_lut_freq(unsigned int cpu, unsigned long util)
 {
+	unsigned long cap = arch_scale_cpu_capacity(cpu);
+	unsigned int util_pct = cap ? (unsigned int)(util * 100 / cap) : 0;
+	util_pct = min(util_pct, 100U);
+
 	if (cpu >= 6)
 		return sugov_lut_lookup(sugov_lut_gold,
-					SUGOV_LUT_SIZE(sugov_lut_gold), util);
+					SUGOV_LUT_SIZE(sugov_lut_gold), util_pct);
 	else
 		return sugov_lut_lookup(sugov_lut_silver,
-					SUGOV_LUT_SIZE(sugov_lut_silver), util);
+					SUGOV_LUT_SIZE(sugov_lut_silver), util_pct);
 }
 
 /**
