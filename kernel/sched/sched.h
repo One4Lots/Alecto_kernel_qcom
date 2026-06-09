@@ -637,7 +637,6 @@ static inline void se_update_runnable(struct sched_entity *se)
 /* CFS-related fields in a runqueue */
 struct cfs_rq {
 	struct load_weight load;
-	unsigned int nr_running;
 	unsigned int nr_queued, h_nr_queued;
 	unsigned int h_nr_runnable;
 	unsigned int h_nr_idle;

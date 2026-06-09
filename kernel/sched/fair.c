@@ -3241,7 +3241,7 @@ account_entity_enqueue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		list_add(&se->group_node, &rq->cfs_tasks);
 	}
 #endif
-	cfs_rq->nr_running++;
+	cfs_rq->nr_queued++;
 }
 
 static void
@@ -3256,7 +3256,7 @@ account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		list_del_init(&se->group_node);
 	}
 #endif
-	cfs_rq->nr_running--;
+	cfs_rq->nr_queued--;
 }
 
 static inline void cfs_rq_util_change(struct cfs_rq *cfs_rq, int flags)
@@ -3400,70 +3400,172 @@ static inline void
 dequeue_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se) { }
 #endif
 
-static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
-			    unsigned long weight, unsigned long runnable)
+static void
+rescale_entity(struct sched_entity *se, unsigned long weight, bool rel_vprot)
 {
 	unsigned long old_weight = se->load.weight;
 
+	/*
+	 * VRUNTIME
+	 * --------
+	 *
+	 * COROLLARY #1: The virtual runtime of the entity needs to be
+	 * adjusted if re-weight at !0-lag point.
+	 *
+	 * Proof: For contradiction assume this is not true, so we can
+	 * re-weight without changing vruntime at !0-lag point.
+	 *
+	 *             Weight	VRuntime   Avg-VRuntime
+	 *     before    w          v            V
+	 *      after    w'         v'           V'
+	 *
+	 * Since lag needs to be preserved through re-weight:
+	 *
+	 *	lag = (V - v)*w = (V'- v')*w', where v = v'
+	 *	==>	V' = (V - v)*w/w' + v		(1)
+	 *
+	 * Let W be the total weight of the entities before reweight,
+	 * since V' is the new weighted average of entities:
+	 *
+	 *	V' = (WV + w'v - wv) / (W + w' - w)	(2)
+	 *
+	 * by using (1) & (2) we obtain:
+	 *
+	 *	(WV + w'v - wv) / (W + w' - w) = (V - v)*w/w' + v
+	 *	==> (WV-Wv+Wv+w'v-wv)/(W+w'-w) = (V - v)*w/w' + v
+	 *	==> (WV - Wv)/(W + w' - w) + v = (V - v)*w/w' + v
+	 *	==>	(V - v)*W/(W + w' - w) = (V - v)*w/w' (3)
+	 *
+	 * Since we are doing at !0-lag point which means V != v, we
+	 * can simplify (3):
+	 *
+	 *	==>	W / (W + w' - w) = w / w'
+	 *	==>	Ww' = Ww + ww' - ww
+	 *	==>	W * (w' - w) = w * (w' - w)
+	 *	==>	W = w	(re-weight indicates w' != w)
+	 *
+	 * So the cfs_rq contains only one entity, hence vruntime of
+	 * the entity @v should always equal to the cfs_rq's weighted
+	 * average vruntime @V, which means we will always re-weight
+	 * at 0-lag point, thus breach assumption. Proof completed.
+	 *
+	 *
+	 * COROLLARY #2: Re-weight does NOT affect weighted average
+	 * vruntime of all the entities.
+	 *
+	 * Proof: According to corollary #1, Eq. (1) should be:
+	 *
+	 *	(V - v)*w = (V' - v')*w'
+	 *	==>    v' = V' - (V - v)*w/w'		(4)
+	 *
+	 * According to the weighted average formula, we have:
+	 *
+	 *	V' = (WV - wv + w'v') / (W - w + w')
+	 *	   = (WV - wv + w'(V' - (V - v)w/w')) / (W - w + w')
+	 *	   = (WV - wv + w'V' - Vw + wv) / (W - w + w')
+	 *	   = (WV + w'V' - Vw) / (W - w + w')
+	 *
+	 *	==>  V'*(W - w + w') = WV + w'V' - Vw
+	 *	==>	V' * (W - w) = (W - w) * V	(5)
+	 *
+	 * If the entity is the only one in the cfs_rq, then reweight
+	 * always occurs at 0-lag point, so V won't change. Or else
+	 * there are other entities, hence W != w, then Eq. (5) turns
+	 * into V' = V. So V won't change in either case, proof done.
+	 *
+	 *
+	 * So according to corollary #1 & #2, the effect of re-weight
+	 * on vruntime should be:
+	 *
+	 *	v' = V' - (V - v) * w / w'		(4)
+	 *	   = V  - (V - v) * w / w'
+	 *	   = V  - vl * w / w'
+	 *	   = V  - vl'
+	 */
+	se->vlag = div64_long(se->vlag * old_weight, weight);
+
+	/*
+	 * DEADLINE
+	 * --------
+	 *
+	 * When the weight changes, the virtual time slope changes and
+	 * we should adjust the relative virtual deadline accordingly.
+	 *
+	 *	d' = v' + (d - v)*w/w'
+	 *	   = V' - (V - v)*w/w' + (d - v)*w/w'
+	 *	   = V  - (V - v)*w/w' + (d - v)*w/w'
+	 *	   = V  + (d - V)*w/w'
+	 */
+	if (se->rel_deadline)
+		se->deadline = div64_long(se->deadline * old_weight, weight);
+
+	if (rel_vprot)
+		se->vprot = div64_long(se->vprot * old_weight, weight);
+}
+
+static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
+			    unsigned long weight)
+{
+	bool curr = cfs_rq->curr == se;
+	bool rel_vprot = false;
+	u64 avruntime = 0;
+
 	if (se->on_rq) {
 		/* commit outstanding execution time */
-		if (cfs_rq->curr == se)
-			update_curr(cfs_rq);
-                else
-                        sum_w_vruntime_sub(cfs_rq, se);
+		update_curr(cfs_rq);
+		avruntime = avg_vruntime(cfs_rq);
+		se->vlag = entity_lag(cfs_rq, se, avruntime);
+		se->deadline -= avruntime;
+		se->rel_deadline = 1;
+		if (curr && protect_slice(se)) {
+			se->vprot -= avruntime;
+			rel_vprot = true;
+		}
+
+		cfs_rq->nr_queued--;
+		if (!curr)
+			__dequeue_entity(cfs_rq, se);
                 update_load_sub(&cfs_rq->load, se->load.weight);
-		dequeue_runnable_avg(cfs_rq, se);
 	}
 	dequeue_load_avg(cfs_rq, se);
 
-	se->runnable_weight = runnable;
-	update_load_set(&se->load, weight);
+	rescale_entity(se, weight, rel_vprot);
 
-	if (!se->on_rq) {
-		/*
-		 * Because we keep se->vlag = V - v_i, while: lag_i = w_i*(V - v_i),
-		 * we need to scale se->vlag when w_i changes.
-		 */
-		se->vlag = div_s64(se->vlag * old_weight, weight);
-	} else {
-		s64 deadline = se->deadline - se->vruntime;
-		/*
-		 * When the weight changes, the virtual time slope changes and
-		 * we should adjust the relative virtual deadline accordingly.
-		 */
-		deadline = div_s64(deadline * old_weight, weight);
-		se->deadline = se->vruntime + deadline;
-	}
+	update_load_set(&se->load, weight);
 
 #ifdef CONFIG_SMP
 	do {
 		u32 divider = get_pelt_divider(&se->avg);
-
 		se->avg.load_avg = div_u64(se_weight(se) * se->avg.load_sum, divider);
-		se->avg.runnable_avg =
-			div_u64(se_runnable(se) * se->avg.runnable_sum, divider);
 	} while (0);
 #endif
 
 	enqueue_load_avg(cfs_rq, se);
 	if (se->on_rq) {
-                update_load_add(&cfs_rq->load, se->load.weight);
-		enqueue_runnable_avg(cfs_rq, se);
-		if (cfs_rq->curr != se)
-			sum_w_vruntime_add(cfs_rq, se);
+		if (rel_vprot)
+			se->vprot += avruntime;
+		se->deadline += avruntime;
+		se->rel_deadline = 0;
+		se->vruntime = avruntime - se->vlag;
+
+		update_load_add(&cfs_rq->load, se->load.weight);
+		if (!curr)
+			__enqueue_entity(cfs_rq, se);
+		cfs_rq->nr_queued++;
 	}
 }
 
-void reweight_task(struct task_struct *p, int prio)
+void reweight_task(struct task_struct *p, const struct load_weight *lw)
 {
 	struct sched_entity *se = &p->se;
 	struct cfs_rq *cfs_rq = cfs_rq_of(se);
 	struct load_weight *load = &se->load;
-	unsigned long weight = scale_load(sched_prio_to_weight[prio]);
 
-	reweight_entity(cfs_rq, se, weight, weight);
-	load->inv_weight = sched_prio_to_wmult[prio];
+	reweight_entity(cfs_rq, se, lw->weight);
+	load->inv_weight = lw->inv_weight;
 }
+
+static inline int throttled_hierarchy(struct cfs_rq *cfs_rq);
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 #ifdef CONFIG_SMP
@@ -3619,8 +3721,6 @@ static long calc_group_runnable(struct cfs_rq *cfs_rq, long shares)
 }
 #endif /* CONFIG_SMP */
 
-static inline int throttled_hierarchy(struct cfs_rq *cfs_rq);
-
 /*
  * Recomputes the group entity based on the current state of its group
  * runqueue.
@@ -3630,7 +3730,11 @@ static void update_cfs_group(struct sched_entity *se)
 	struct cfs_rq *gcfs_rq = group_cfs_rq(se);
 	long shares, runnable;
 
-	if (!gcfs_rq)
+	/*
+	 * When a group becomes empty, preserve its weight. This matters for
+	 * DELAY_DEQUEUE.
+	 */
+	if (!gcfs_rq || !gcfs_rq->load.weight)
 		return;
 
 	if (throttled_hierarchy(gcfs_rq))
@@ -3643,10 +3747,10 @@ static void update_cfs_group(struct sched_entity *se)
 		return;
 #else
 	shares   = calc_group_shares(gcfs_rq);
-	runnable = calc_group_runnable(gcfs_rq, shares);
 #endif
 
-	reweight_entity(cfs_rq_of(se), se, shares, runnable);
+	if (unlikely(se->load.weight != shares))
+		reweight_entity(cfs_rq_of(se), se, shares);
 }
 
 #else /* CONFIG_FAIR_GROUP_SCHED */
@@ -4565,36 +4669,42 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 {
 	bool curr = cfs_rq->curr == se;
 
+	/*
+	 * If we're the current task, we must renormalise before calling
+	 * update_curr().
+	 */
+	if (curr)
+		place_entity(cfs_rq, se, flags);
+
 	update_curr(cfs_rq);
 
 	/*
 	 * When enqueuing a sched_entity, we must:
 	 *   - Update loads to have both entity and cfs_rq synced with now.
-	 *   - Add its load to cfs_rq->avg.runnable_avg
+	 *   - For group_entity, update its runnable_weight to reflect the new
+	 *     h_nr_running of its group cfs_rq.
 	 *   - For group_entity, update its weight to reflect the new share of
 	 *     its group cfs_rq
 	 *   - Add its new weight to cfs_rq->load.weight
 	 */
-	update_load_avg(cfs_rq_of(se), se, UPDATE_TG | DO_ATTACH);
-	enqueue_entity_load_avg(cfs_rq, se);
+	update_load_avg(cfs_rq, se, UPDATE_TG | DO_ATTACH);
+	/*
+	 * XXX update_load_avg() above will have attached us to the pelt sum;
+	 * but update_cfs_group() here will re-adjust the weight and have to
+	 * undo/redo all that. Seems wasteful.
+	 */
+	se_update_runnable(se);
 	update_cfs_group(se);
-	account_entity_enqueue(cfs_rq, se);
-
-	if (cfs_rq->nr_queued == 1 && !cfs_rq->curr)
-    	update_idle_cfs_rq_clock_pelt(cfs_rq);
-
-	if (flags & ENQUEUE_WAKEUP)
-		place_entity(cfs_rq, se, 0);
-	else if (flags & ENQUEUE_DELAYED)
-		SCHED_WARN_ON(!se->sched_delayed);
 
 	/*
-	 * Ensure deadline is always valid before __enqueue_entity.
-	 * A zero deadline means this is a new or migrated task that
-	 * never went through place_entity on this rq.
+	 * XXX now that the entity has been re-weighted, and it's lag adjusted,
+	 * we can place the entity.
 	 */
-	if (!se->deadline)
-		se->deadline = se->vruntime + calc_delta_fair(se->slice, se);
+	if (!curr)
+		place_entity(cfs_rq, se, flags);
+
+	account_entity_enqueue(cfs_rq, se);
+
 	/* Entity has migrated, no longer consider this task hot */
 	if (flags & ENQUEUE_MIGRATED)
 		se->exec_start = 0;
@@ -4605,12 +4715,10 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 		__enqueue_entity(cfs_rq, se);
 	se->on_rq = 1;
 
-	if (flags & ENQUEUE_DELAYED)
-		clear_delayed(se);
-
-	if (cfs_rq->nr_running == 1) {
-		list_add_leaf_cfs_rq(cfs_rq);
+	if (cfs_rq->nr_queued == 1) {
 		check_enqueue_throttle(cfs_rq);
+		if (!throttled_hierarchy(cfs_rq))
+			list_add_leaf_cfs_rq(cfs_rq);
 	}
 }
 
@@ -5308,7 +5416,7 @@ static __always_inline void return_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 	if (!cfs_bandwidth_used())
 		return;
 
-	if (!cfs_rq->runtime_enabled || cfs_rq->nr_running)
+	if (!cfs_rq->runtime_enabled || cfs_rq->nr_queued)
 		return;
 
 	__return_cfs_rq_runtime(cfs_rq);
@@ -9144,7 +9252,7 @@ pick_next_task_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf
 	int new_tasks;
 
 again:
-	if (!cfs_rq->nr_running)
+	if (!cfs_rq->nr_queued)
 		goto idle;
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -9183,7 +9291,7 @@ again:
 			if (unlikely(check_cfs_rq_runtime(cfs_rq))) {
 				cfs_rq = &rq->cfs;
 
-				if (!cfs_rq->nr_running)
+				if (!cfs_rq->nr_queued)
 					goto idle;
 
 				goto simple;
@@ -9626,11 +9734,12 @@ static inline int migrate_degrades_locality(struct task_struct *p,
 #endif
 
 /*
- * Check whether the task is ineligible on the destination cpu.
+ * Check whether the task is ineligible on the destination cpu
  *
- * When the PLACE_LAG scheduling feature is enabled and dst_cfs_rq->nr_queued
- * is greater than 0, if the task is ineligible, it will also be ineligible
- * when migrated to the destination cpu.
+ * When the PLACE_LAG scheduling feature is enabled and
+ * dst_cfs_rq->nr_running is greater than 1, if the task
+ * is ineligible, it will also be ineligible when
+ * it is migrated to the destination cpu.
  */
 static inline int task_is_ineligible_on_dst_cpu(struct task_struct *p, int dest_cpu)
 {
