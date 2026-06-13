@@ -160,14 +160,14 @@ SCHED_FEAT(PARANOID_AVG, false)
  * EEVDF: Allow tasks with a shorter slice to wakeup-preempt the current task,
  * overriding slice protection. Improves latency for interactive tasks.
  */
-SCHED_FEAT(PREEMPT_SHORT, true)
+SCHED_FEAT(PREEMPT_SHORT, false)
 
 /*
  * EEVDF: Protect the current task's slice against preemption only up to the
  * minimum slice of all runnable tasks (run-to-parity). When disabled, the
  * full normalized base slice is used as the protection window.
  */
-SCHED_FEAT(RUN_TO_PARITY, false)
+SCHED_FEAT(RUN_TO_PARITY, true)
 
 /*
  * EEVDF: Honor the ->next buddy hint when picking the next task, allowing
