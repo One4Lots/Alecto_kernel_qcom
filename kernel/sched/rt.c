@@ -1820,6 +1820,7 @@ static int find_lowest_rq(struct task_struct *task)
 	struct cpumask *lowest_mask = this_cpu_cpumask_var_ptr(local_cpu_mask);
 	int this_cpu = smp_processor_id();
 	int cpu      = task_cpu(task);
+	int ret;
 
 	/* Make sure the mask is initialized first */
 	if (unlikely(!lowest_mask))
@@ -1832,19 +1833,19 @@ static int find_lowest_rq(struct task_struct *task)
 	 * If we're on asym system ensure we consider the different capacities
 	 * of the CPUs when searching for the lowest_mask.
 	 */
-	if (!cpupri_find(&task_rq(task)->rd->cpupri, task, lowest_mask))
-		return -1; /* No targets found */
+	if (static_branch_unlikely(&sched_asym_cpucapacity)) {
 
-	/*
-	 * At this point we have built a mask of CPUs representing the
-	 * lowest priority tasks in the system.  Now we want to elect
-	 * the best one based on our affinity and topology.
-	 *
-	 * We prioritize the last CPU that the task executed on since
-	 * it is most likely cache-hot in that location.
-	 */
-	if (cpumask_test_cpu(cpu, lowest_mask))
-		return cpu;
+		ret = cpupri_find_fitness(&task_rq(task)->rd->cpupri,
+					  task, lowest_mask,
+					  rt_task_fits_capacity);
+	} else {
+
+		ret = cpupri_find(&task_rq(task)->rd->cpupri,
+				  task, lowest_mask);
+	}
+
+	if (!ret)
+		return -1; /* No targets found */
 
 	/*
 	 * Otherwise, we consult the sched_domains span maps to figure
