@@ -527,6 +527,10 @@ static inline void list_del_leaf_cfs_rq(struct cfs_rq *cfs_rq)
 {
 }
 
+static inline void assert_list_leaf_cfs_rq(struct rq *rq)
+{
+}
+
 #define for_each_leaf_cfs_rq(rq, cfs_rq)	\
 		for (cfs_rq = &rq->cfs; cfs_rq; cfs_rq = NULL)
 
@@ -6021,13 +6025,13 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 {
 	struct cfs_rq *cfs_rq;
 	struct sched_entity *se = &p->se;
-	int task_new = !(flags & ENQUEUE_WAKEUP);
-	int h_nr_runnable = 1;
 	int h_nr_idle = task_has_idle_policy(p);
+	int h_nr_runnable = 1;
+	int task_new = !(flags & ENQUEUE_WAKEUP);
+	bool prefer_idle = sched_feat(EAS_PREFER_IDLE) ?
+				(schedtune_prefer_idle(p) > 0) : 0;
+	u64 slice = 0;
 
-#ifdef CONFIG_SCHED_WALT
-	p->misfit = !task_fits_max(p, rq->cpu);
-#endif
 	/*
 	 * The code below (indirectly) updates schedutil which looks at
 	 * the cfs_rq utilization to select a frequency.
@@ -6042,31 +6046,19 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		return;
 	}
 
-	/*
-	 * The code below (indirectly) updates schedutil which looks at
-	 * the cfs_rq utilization to select a frequency.
-	 * Let's update schedtune here to ensure the boost value of the
-	 * current task is accounted for in the selection of the OPP.
-	 *
-	 * We do it also in the case where we enqueue a throttled task;
-	 * we could argue that a throttled task should not boost a CPU,
-	 * however:
-	 * a) properly implementing CPU boosting considering throttled
-	 *    tasks will increase a lot the complexity of the solution
-	 * b) it's not easy to quantify the benefits introduced by
-	 *    such a more complex solution.
-	 * Thus, for the time being we go for the simple solution and boost
-	 * also for throttled RQs.
-	 */
-	schedtune_enqueue_task(p, cpu_of(rq));
-
+#ifdef CONFIG_SCHED_WALT
+	p->misfit = !task_fits_max(p, rq->cpu);
+#endif
 	/*
 	 * If in_iowait is set, the code below may not trigger any cpufreq
 	 * utilization updates, so do it here explicitly with the IOWAIT flag
 	 * passed.
 	 */
-	if (p->in_iowait)
+	if (p->in_iowait && prefer_idle)
 		cpufreq_update_util(rq, SCHED_CPUFREQ_IOWAIT);
+
+	if (task_new && se->sched_delayed)
+		h_nr_runnable = 0;
 
 	for_each_sched_entity(se) {
 		if (se->on_rq) {
@@ -6075,39 +6067,73 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 			break;
 		}
 		cfs_rq = cfs_rq_of(se);
-		enqueue_entity(cfs_rq, se, flags);
 
 		/*
-		 * end evaluation on encountering a throttled cfs_rq
+		 * Basically set the slice of group entries to the min_slice of
+		 * their respective cfs_rq. This ensures the group can service
+		 * its entities in the desired time-frame.
 		 */
-		if (cfs_rq_throttled(cfs_rq))
-			break;
-		cfs_rq->h_nr_queued++;
+		if (slice) {
+			se->slice = slice;
+			se->custom_slice = 1;
+		}
+		enqueue_entity(cfs_rq, se, flags);
+		slice = cfs_rq_min_slice(cfs_rq);
+
 		cfs_rq->h_nr_runnable += h_nr_runnable;
+		cfs_rq->h_nr_queued++;
 		cfs_rq->h_nr_idle += h_nr_idle;
+
+		/* end evaluation on encountering a throttled cfs_rq */
+		if (cfs_rq_throttled(cfs_rq))
+			goto enqueue_throttle;
 
 		flags = ENQUEUE_WAKEUP;
 	}
 
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
-		cfs_rq->h_nr_queued++;
+
+		update_load_avg(cfs_rq, se, UPDATE_TG);
+		se_update_runnable(se);
+		update_cfs_group(se);
+
+		se->slice = slice;
+		if (se != cfs_rq->curr)
+			min_vruntime_cb_propagate(&se->run_node, NULL);
+		slice = cfs_rq_min_slice(cfs_rq);
+
 		cfs_rq->h_nr_runnable += h_nr_runnable;
+		cfs_rq->h_nr_queued++;
 		cfs_rq->h_nr_idle += h_nr_idle;
 
+		/* end evaluation on encountering a throttled cfs_rq */
 		if (cfs_rq_throttled(cfs_rq))
-			break;
-
-		update_load_avg(cfs_rq_of(se), se, UPDATE_TG);
-		update_cfs_group(se);
+			goto enqueue_throttle;
 	}
 
-	if (!se) {
-		add_nr_running(rq, 1);
-		inc_rq_walt_stats(rq, p);
-		if (!task_new)
-			update_overutilized_status(rq);
-	}
+	/* At this point se is NULL and we are at root level*/
+	add_nr_running(rq, 1);
+
+	/*
+	 * Since new tasks are assigned an initial util_avg equal to
+	 * half of the spare capacity of their CPU, tiny tasks have the
+	 * ability to cross the overutilized threshold, which will
+	 * result in the load balancer ruining all the task placement
+	 * done by EAS. As a way to mitigate that effect, do not account
+	 * for the first enqueue operation of new tasks during the
+	 * overutilized flag detection.
+	 *
+	 * A better way of solving this problem would be to wait for
+	 * the PELT signals of tasks to converge before taking them
+	 * into account, but that is not straightforward to implement,
+	 * and the following generally works well enough in practice.
+	 */
+	if (!task_new)
+		update_overutilized_status(rq);
+
+enqueue_throttle:
+	assert_list_leaf_cfs_rq(rq);
 
 	hrtick_update(rq);
 }
