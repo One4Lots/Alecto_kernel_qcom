@@ -1710,7 +1710,7 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 
 	dl_rq = &rq->dl;
 
-	if (need_pull_dl_task(rq, prev)) {
+	if (prev && need_pull_dl_task(rq, prev)) {
 		/*
 		 * This is OK, because current is on_cpu, which avoids it being
 		 * picked for load-balance and preemption/IRQs are still
@@ -1733,7 +1733,7 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	 * When prev is DL, we may throttle it in put_prev_task().
 	 * So, we update time before we check for dl_nr_running.
 	 */
-	if (prev->sched_class == &dl_sched_class)
+	if (prev && prev->sched_class == &dl_sched_class)
 		update_curr_dl(rq);
 
 	if (unlikely(!dl_rq->dl_nr_running))
@@ -1751,7 +1751,7 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	if (hrtick_enabled(rq))
 		start_hrtick_dl(rq, p);
 
-	if (prev->sched_class != &dl_sched_class)
+	if (prev && prev->sched_class != &dl_sched_class)
 		update_dl_rq_load_avg(rq_clock_pelt(rq), rq,
  0);
 

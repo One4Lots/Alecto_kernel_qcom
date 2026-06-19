@@ -1714,14 +1714,13 @@ static struct task_struct *_pick_next_task_rt(struct rq *rq)
 	return rt_task_of(rt_se);
 }
 
-
 static struct task_struct *
 pick_next_task_rt(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 {
 	struct task_struct *p;
 	struct rt_rq *rt_rq = &rq->rt;
 
-	if (need_pull_rt_task(rq, prev)) {
+	if (prev && need_pull_rt_task(rq, prev)) {
 		/*
 		 * This is OK, because current is on_cpu, which avoids it being
 		 * picked for load-balance and preemption/IRQs are still
@@ -1745,7 +1744,7 @@ pick_next_task_rt(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	 * We may dequeue prev's rt_rq in put_prev_task().
 	 * So, we update time before rt_nr_running check.
 	 */
-	if (prev->sched_class == &rt_sched_class)
+	if (prev && prev->sched_class == &rt_sched_class)
 		update_curr_rt(rq);
 
 	if (!rt_rq->rt_queued)
