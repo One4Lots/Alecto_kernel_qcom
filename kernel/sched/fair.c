@@ -761,6 +761,8 @@ u64 avg_vruntime(struct cfs_rq *cfs_rq)
 	return cfs_rq->zero_vruntime;
 }
 
+static inline u64 cfs_rq_max_slice(struct cfs_rq *cfs_rq);
+
 /*
  * lag_i = S - s_i = w_i * (V - v_i)
  *
@@ -774,17 +776,16 @@ u64 avg_vruntime(struct cfs_rq *cfs_rq)
  * EEVDF gives the following limit for a steady state system:
  *
  *   -r_max < lag < max(r_max, q)
- *
- * XXX could add max_slice to the augmented data to track this.
  */
-static s64 entity_lag(struct cfs_rq *cfs_rq, struct sched_entity *se,
-		      u64 avg_vr)
+static s64 entity_lag(struct cfs_rq *cfs_rq, struct sched_entity *se, u64 avruntime)
 {
-	s64 lag, limit;
+    u64 max_slice = cfs_rq_max_slice(cfs_rq) + TICK_NSEC;
+    s64 vlag, limit;
 
-	lag = avg_vr - se->vruntime;
-	limit = calc_delta_fair(max_t(u64, 2*se->slice, TICK_NSEC), se);
-	return clamp(lag, -limit, limit);
+    vlag = avruntime - se->vruntime;
+    limit = calc_delta_fair(max_slice, se);
+
+    return clamp(vlag, -limit, limit);
 }
 
 static __always_inline
