@@ -806,15 +806,48 @@ bool update_entity_lag(struct cfs_rq *cfs_rq, struct sched_entity *se)
 
 	return avruntime - vlag != se->vruntime;
 }
-
+static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq);
 static void set_delayed(struct sched_entity *se)
 {
 	se->sched_delayed = 1;
+
+	/*
+	 * Delayed se of cfs_rq have no tasks queued on them.
+	 * Do not adjust h_nr_runnable since dequeue_entities()
+	 * will account it for blocked tasks.
+	 */
+	if (!entity_is_task(se))
+		return;
+
+	for_each_sched_entity(se) {
+		struct cfs_rq *cfs_rq = cfs_rq_of(se);
+
+		cfs_rq->h_nr_runnable--;
+		if (cfs_rq_throttled(cfs_rq))
+			break;
+	}
 }
 
 static void clear_delayed(struct sched_entity *se)
 {
 	se->sched_delayed = 0;
+
+	/*
+	 * Delayed se of cfs_rq have no tasks queued on them.
+	 * Do not adjust h_nr_runnable since a dequeue has
+	 * already accounted for it or an enqueue of a task
+	 * below it will account for it in enqueue_task_fair().
+	 */
+	if (!entity_is_task(se))
+		return;
+
+	for_each_sched_entity(se) {
+		struct cfs_rq *cfs_rq = cfs_rq_of(se);
+
+		cfs_rq->h_nr_runnable++;
+		if (cfs_rq_throttled(cfs_rq))
+			break;
+	}
 }
 
 /*
@@ -4146,10 +4179,13 @@ static void detach_entity_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *s
 /*
  * Optional action to be done while updating the load average
  */
-#define UPDATE_TG	0x1
-#define SKIP_AGE_LOAD	0x2
-#define DO_ATTACH	0x4
-#define DO_DETACH	0x8
+#define UPDATE_TG	0x01
+#define SKIP_AGE_LOAD	0x02
+#define DO_ATTACH	0x04
+#define DO_DETACH	0x08
+#define UPDATE_UTIL_EST	0x10
+
+static inline void util_est_update(struct sched_entity *se);
 
 /* Update task and its cfs_rq load average */
 static inline void update_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
@@ -4189,6 +4225,10 @@ static inline void update_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *s
 		if (flags & UPDATE_TG)
 			update_tg_load_avg(cfs_rq, 0);
 	}
+
+	if (flags & UPDATE_UTIL_EST)
+		util_est_update(se);
+
 	cfs_rq_util_change(cfs_rq, 0);
 }
 
@@ -4466,24 +4506,15 @@ static inline void util_est_dequeue(struct cfs_rq *cfs_rq,
 
 #define UTIL_EST_MARGIN (SCHED_CAPACITY_SCALE / 100)
 
-static inline void util_est_update(struct cfs_rq *cfs_rq,
-				   struct task_struct *p,
-				   bool task_sleep)
+static inline void util_est_update(struct sched_entity *se)
 {
 	unsigned int ewma, dequeued, last_ewma_diff;
 
 	if (!sched_feat(UTIL_EST))
 		return;
 
-	/*
-	 * Skip update of task's estimated utilization when the task has not
-	 * yet completed an activation, e.g. being migrated.
-	 */
-	if (!task_sleep)
-		return;
-
 	/* Get current estimate of utilization */
-	ewma = READ_ONCE(p->se.avg.util_est);
+	ewma = READ_ONCE(se->avg.util_est);
 
 	/*
 	 * If the PELT values haven't changed since enqueue time,
@@ -4493,7 +4524,7 @@ static inline void util_est_update(struct cfs_rq *cfs_rq,
 		return;
 
 	/* Get utilization at dequeue */
-	dequeued = task_util(p);
+	dequeued = READ_ONCE(se->avg.util_avg);
 
 	/*
 	 * Reset EWMA on utilization increases, the moving average is used only
@@ -4516,9 +4547,8 @@ static inline void util_est_update(struct cfs_rq *cfs_rq,
 	 * To avoid underestimate of task utilization, skip updates of EWMA if
 	 * we cannot grant that thread got all CPU time it wanted.
 	 */
-	if ((dequeued + UTIL_EST_MARGIN) < task_runnable(p))
+	if ((dequeued + UTIL_EST_MARGIN) < READ_ONCE(se->avg.runnable_avg))
 		goto done;
-
 
 	/*
 	 * Update Task's estimated utilization
@@ -4541,10 +4571,7 @@ static inline void util_est_update(struct cfs_rq *cfs_rq,
 	ewma >>= UTIL_EST_WEIGHT_SHIFT;
 done:
 	ewma |= UTIL_AVG_UNCHANGED;
-	WRITE_ONCE(p->se.avg.util_est, ewma);
-
-	/* Update plots for Task's estimated utilization */
-	trace_sched_util_est_task(p, &p->se.avg);
+	WRITE_ONCE(se->avg.util_est, ewma);
 }
 
 #else /* CONFIG_SMP */
@@ -4867,7 +4894,7 @@ static bool
 dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 {
 	bool sleep = flags & DEQUEUE_SLEEP;
-	int action = UPDATE_TG;
+	int action = 0;
 
 	update_curr(cfs_rq);
 	clear_buddies(cfs_rq, se);
@@ -4887,15 +4914,23 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 
 		if (sched_feat(DELAY_DEQUEUE) && delay &&
 		    !entity_eligible(cfs_rq, se)) {
-			update_load_avg(cfs_rq, se, 0);
+			if (entity_is_task(se))
+				action |= UPDATE_UTIL_EST;
+			update_load_avg(cfs_rq, se, action);
 			update_entity_lag(cfs_rq, se);
 			set_delayed(se);
 			return false;
 		}
 	}
 
-	if (entity_is_task(se) && task_on_rq_migrating(task_of(se)))
-		action |= DO_DETACH;
+	action = UPDATE_TG;
+	if (entity_is_task(se)) {
+		if (task_on_rq_migrating(task_of(se)))
+			action |= DO_DETACH;
+
+		if (sleep && !(flags & DEQUEUE_DELAYED))
+			action |= UPDATE_UTIL_EST;
+	}
 
 	/*
 	 * When dequeuing a sched_entity, we must:
@@ -6256,7 +6291,6 @@ static bool dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	if (!p->se.sched_delayed)
 		util_est_dequeue(&rq->cfs, p);
 
-	util_est_update(&rq->cfs, p, flags & DEQUEUE_SLEEP);
 	if (dequeue_entities(rq, &p->se, flags) < 0)
 		return false;
 
