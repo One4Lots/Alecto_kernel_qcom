@@ -194,8 +194,8 @@ static int cpufreq_cooling_pm_notify(struct notifier_block *nb,
 			if (cpufreq_cdev->cpufreq_state ==
 				cpufreq_cdev->max_level) {
 				cpu = cpufreq_cdev->cpu_id;
-				continue;
 			}
+			mutex_unlock(&core_isolate_lock);
 		}
 
 		atomic_set(&in_suspend, 0);
