@@ -3905,6 +3905,32 @@ update_tg_cfs_util(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	__update_sa(&cfs_rq->avg, util, delta_avg, delta_sum);
 }
 
+static inline void
+update_tg_cfs_runnable(struct cfs_rq *cfs_rq, struct sched_entity *se, struct cfs_rq *gcfs_rq)
+{
+	long delta_sum, delta_avg = gcfs_rq->avg.runnable_avg - se->avg.runnable_avg;
+	u32 new_sum, divider;
+
+	/* Nothing to update */
+	if (!delta_avg)
+		return;
+
+	/*
+	 * cfs_rq->avg.period_contrib can be used for both cfs_rq and se.
+	 * See ___update_load_avg() for details.
+	 */
+	divider = get_pelt_divider(&cfs_rq->avg);
+
+	/* Set new sched_entity's runnable */
+	se->avg.runnable_avg = gcfs_rq->avg.runnable_avg;
+	new_sum = se->avg.runnable_avg * divider;
+	delta_sum = (long)new_sum - (long)se->avg.runnable_sum;
+	se->avg.runnable_sum = new_sum;
+
+	/* Update parent cfs_rq runnable */
+	__update_sa(&cfs_rq->avg, runnable, delta_avg, delta_sum);
+}
+
 /* Take into account change of load of a child task group */
 static inline void
 update_tg_cfs_load(struct cfs_rq *cfs_rq, struct sched_entity *se)
@@ -3971,39 +3997,33 @@ update_tg_cfs_load(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	}
 }
 
-static inline void set_tg_cfs_propagate(struct cfs_rq *cfs_rq)
+static inline void add_tg_cfs_propagate(struct cfs_rq *cfs_rq, long runnable_sum)
 {
 	cfs_rq->propagate = 1;
-}
-
-static inline int test_and_clear_tg_cfs_propagate(struct sched_entity *se)
-{
-	struct cfs_rq *cfs_rq = group_cfs_rq(se);
-
-	if (!cfs_rq->propagate)
-		return 0;
-
-	cfs_rq->propagate = 0;
-	return 1;
+	cfs_rq->prop_runnable_sum += runnable_sum;
 }
 
 /* Update task and its cfs_rq load average */
 static inline int propagate_entity_load_avg(struct sched_entity *se)
 {
-	struct cfs_rq *cfs_rq;
+	struct cfs_rq *cfs_rq, *gcfs_rq;
 
 	if (entity_is_task(se))
 		return 0;
 
-	if (!test_and_clear_tg_cfs_propagate(se))
+	gcfs_rq = group_cfs_rq(se);
+	if (!gcfs_rq->propagate)
 		return 0;
+
+	gcfs_rq->propagate = 0;
 
 	cfs_rq = cfs_rq_of(se);
 
-	set_tg_cfs_propagate(cfs_rq);
+	add_tg_cfs_propagate(cfs_rq, gcfs_rq->prop_runnable_sum);
 
-	update_tg_cfs_util(cfs_rq, se);
-	update_tg_cfs_load(cfs_rq, se);
+	update_tg_cfs_util(cfs_rq, se, gcfs_rq);
+	update_tg_cfs_runnable(cfs_rq, se, gcfs_rq);
+	update_tg_cfs_load(cfs_rq, se, gcfs_rq);
 
 	trace_sched_load_cfs_rq(cfs_rq);
 	trace_sched_load_se(se);
@@ -4050,7 +4070,7 @@ static inline int propagate_entity_load_avg(struct sched_entity *se)
 	return 0;
 }
 
-static inline void set_tg_cfs_propagate(struct cfs_rq *cfs_rq) {}
+static inline void add_tg_cfs_propagate(struct cfs_rq *cfs_rq, long runnable_sum) {}
 
 #endif /* CONFIG_FAIR_GROUP_SCHED */
 
@@ -4090,38 +4110,45 @@ static inline void set_tg_cfs_propagate(struct cfs_rq *cfs_rq) {}
 static inline int
 update_cfs_rq_load_avg(u64 now, struct cfs_rq *cfs_rq)
 {
+	unsigned long removed_load = 0, removed_util = 0, removed_runnable = 0;
 	struct sched_avg *sa = &cfs_rq->avg;
-	int decayed, removed_load = 0, removed_util = 0;
+	int decayed = 0;
 
 	if (cfs_rq->removed.nr) {
-		unsigned long flags;
-		u32 divider = get_pelt_divider(sa);
+		unsigned long r;
+		u32 divider = get_pelt_divider(&cfs_rq->avg);
 
-		raw_spin_lock_irqsave(&cfs_rq->removed.lock, flags);
-		sub_positive(&sa->load_avg, cfs_rq->removed.load_avg);
-		sub_positive(&sa->load_sum, cfs_rq->removed.load_avg * divider);
-		sub_positive(&sa->util_avg, cfs_rq->removed.util_avg);
-		sub_positive(&sa->util_sum, (u64)cfs_rq->removed.util_avg * divider);
-		sub_positive(&sa->runnable_avg, cfs_rq->removed.runnable_avg);
-		sub_positive(&sa->runnable_sum, cfs_rq->removed.runnable_avg * divider);
+		raw_spin_lock(&cfs_rq->removed.lock);
+		swap(cfs_rq->removed.util_avg, removed_util);
+		swap(cfs_rq->removed.load_avg, removed_load);
+		swap(cfs_rq->removed.runnable_avg, removed_runnable);
 		cfs_rq->removed.nr = 0;
-		cfs_rq->removed.load_avg = 0;
-		cfs_rq->removed.util_avg = 0;
-		cfs_rq->removed.runnable_avg = 0;
-		raw_spin_unlock_irqrestore(&cfs_rq->removed.lock, flags);
+		raw_spin_unlock(&cfs_rq->removed.lock);
 
-		removed_load = 1;
-		set_tg_cfs_propagate(cfs_rq);
+		r = removed_load;
+		__update_sa(sa, load, -r, -r*divider);
+
+		r = removed_util;
+		__update_sa(sa, util, -r, -r*divider);
+
+		r = removed_runnable;
+		__update_sa(sa, runnable, -r, -r*divider);
+
+		/*
+		 * removed_runnable is the unweighted version of removed_load so we
+		 * can use it to estimate removed_load_sum.
+		 */
+		add_tg_cfs_propagate(cfs_rq,
+			-(long)(removed_runnable * divider) >> SCHED_CAPACITY_SHIFT);
+
+		decayed = 1;
 	}
 
-	decayed = __update_load_avg_cfs_rq(now, cfs_rq);
-
-#ifndef CONFIG_64BIT
-	smp_wmb();
-	cfs_rq->load_last_update_time_copy = sa->last_update_time;
-#endif
-
-	return decayed || removed_load;
+	decayed |= __update_load_avg_cfs_rq(now, cfs_rq);
+	u64_u32_store_copy(sa->last_update_time,
+			   cfs_rq->last_update_time_copy,
+			   sa->last_update_time);
+	return decayed;
 }
 
 /**
@@ -4134,25 +4161,48 @@ update_cfs_rq_load_avg(u64 now, struct cfs_rq *cfs_rq)
  */
 static void attach_entity_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
+	/*
+	 * cfs_rq->avg.period_contrib can be used for both cfs_rq and se.
+	 * See ___update_load_avg() for details.
+	 */
 	u32 divider = get_pelt_divider(&cfs_rq->avg);
 
+	/*
+	 * When we attach the @se to the @cfs_rq, we must align the decay
+	 * window because without that, really weird and wonderful things can
+	 * happen.
+	 *
+	 * XXX illustrate
+	 */
 	se->avg.last_update_time = cfs_rq->avg.last_update_time;
 	se->avg.period_contrib = cfs_rq->avg.period_contrib;
 
-	se->avg.util_sum     = se->avg.util_avg * divider;
-	se->avg.runnable_sum = se->avg.runnable_avg * divider;
-	se->avg.load_sum     = se->avg.load_avg * divider;
+	/*
+	 * Hell(o) Nasty stuff.. we need to recompute _sum based on the new
+	 * period_contrib. This isn't strictly correct, but since we're
+	 * entirely outside of the PELT hierarchy, nobody cares if we truncate
+	 * _sum a little.
+	 */
+	se->avg.util_sum = se->avg.util_avg * divider;
+
+        se->avg.runnable_sum = se->avg.runnable_avg * divider;
+
+	se->avg.load_sum = se->avg.load_avg * divider;
 	if (se_weight(se) < se->avg.load_sum)
 		se->avg.load_sum = div_u64(se->avg.load_sum, se_weight(se));
 	else
 		se->avg.load_sum = 1;
 
 	enqueue_load_avg(cfs_rq, se);
-	__update_sa(&cfs_rq->avg, util, se->avg.util_avg, se->avg.util_sum);
-	__update_sa(&cfs_rq->avg, runnable, se->avg.runnable_avg, se->avg.runnable_sum);
+	cfs_rq->avg.util_avg += se->avg.util_avg;
+	cfs_rq->avg.util_sum += se->avg.util_sum;
+	cfs_rq->avg.runnable_avg += se->avg.runnable_avg;
+	cfs_rq->avg.runnable_sum += se->avg.runnable_sum;
 
-	set_tg_cfs_propagate(cfs_rq);
+	add_tg_cfs_propagate(cfs_rq, se->avg.load_sum);
+
 	cfs_rq_util_change(cfs_rq, 0);
+
 	trace_sched_load_cfs_rq(cfs_rq);
 }
 
@@ -4171,8 +4221,10 @@ static void detach_entity_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *s
 	__update_sa(&cfs_rq->avg, util, -se->avg.util_avg, -se->avg.util_sum);
 	__update_sa(&cfs_rq->avg, runnable, -se->avg.runnable_avg, -se->avg.runnable_sum);
 
-	set_tg_cfs_propagate(cfs_rq);
+	add_tg_cfs_propagate(cfs_rq, -se->avg.load_sum);
+
 	cfs_rq_util_change(cfs_rq, 0);
+
 	trace_sched_load_cfs_rq(cfs_rq);
 }
 
@@ -6982,6 +7034,7 @@ static int calc_sg_energy(struct energy_env *eenv)
  * NOTE: compute_energy() may fail when racing with sched_domain updates, in
  *       which case we abort by returning -EINVAL.
  */
+#ifndef CONFIG_SCHED_CASS
 static int compute_energy(struct energy_env *eenv)
 {
 	struct sched_domain *sd;
@@ -7074,7 +7127,7 @@ next_cpu:
 
 	return 0;
 }
-
+#endif
 static inline bool cpu_in_sg(struct sched_group *sg, int cpu)
 {
 	return cpu != -1 && cpumask_test_cpu(cpu, sched_group_span(sg));
@@ -7161,6 +7214,7 @@ static void dump_eenv_debug(struct energy_env *eenv)
  * A value greater than zero means that the most energy efficient CPU is the
  * one represented by eenv->cpu[eenv->next_idx].cpu_id.
  */
+#ifndef CONFIG_SCHED_CASS
 static inline int select_energy_cpu_idx(struct energy_env *eenv)
 {
 	int last_cpu_idx = eenv->max_cpu_count - 1;
@@ -7248,7 +7302,7 @@ static inline int select_energy_cpu_idx(struct energy_env *eenv)
 
 	return eenv->next_idx;
 }
-
+#endif
 /*
  * Detect M:N waker/wakee relationships via a switching-frequency heuristic.
  *
@@ -8124,6 +8178,7 @@ enum fastpaths {
 	MANY_WAKEUP,
 };
 
+#ifndef CONFIG_SCHED_CASS
 static inline int find_best_target(struct task_struct *p, int *backup_cpu,
 				   bool boosted, bool prefer_idle,
 				   struct find_best_target_env *fbt_env)
@@ -8590,7 +8645,7 @@ static inline int find_best_target(struct task_struct *p, int *backup_cpu,
 out:
 	return target_cpu;
 }
-
+#endif
 /*
  * Disable WAKE_AFFINE in the case where task @p doesn't fit in the
  * capacity of either the waking CPU @cpu or the previous CPU @prev_cpu.
@@ -8968,8 +9023,6 @@ out:
 	return target_cpu;
 }
 #endif /* CONFIG_SCHED_CASS */
-
-static void nohz_balancer_kick(bool only_update);
 
 #ifndef CONFIG_SCHED_CASS
 /*
@@ -10335,8 +10388,8 @@ static inline void update_blocked_load_tick(struct rq *rq)
 
 static inline void update_blocked_load_status(struct rq *rq, bool has_blocked)
 {
-	// if (!has_blocked) // no op for now
-	//	rq->has_blocked_load = 0;
+	if (!has_blocked)
+		rq->has_blocked_load = 0;
 }
 #else
 static inline bool cfs_rq_has_blocked(struct cfs_rq *cfs_rq) { return false; }
@@ -10739,6 +10792,12 @@ check_cpu_capacity(struct rq *rq, struct sched_domain *sd)
 				(rq->cpu_capacity_orig * 100));
 }
 
+/* Check if the rq has a misfit task */
+static inline bool check_misfit_status(struct rq *rq)
+{
+	return rq->misfit_task_load;
+}
+
 /*
  * Group imbalance indicates (and tries to solve) the problem where balancing
  * groups is inadequate due to ->cpus_allowed constraints.
@@ -11101,9 +11160,10 @@ static inline enum fbq_type fbq_classify_rq(struct rq *rq)
 #ifdef CONFIG_NO_HZ_COMMON
 static struct {
 	cpumask_var_t idle_cpus_mask;
-	atomic_t nr_cpus;
+	int has_blocked;		/* Idle CPUS has blocked load */
+	int needs_update;		/* Newly idle CPUs need their next_balance collated */
 	unsigned long next_balance;     /* in jiffy units */
-	unsigned long next_update;     /* in jiffy units */
+	unsigned long next_blocked;	/* Next update of blocked load in jiffies */
 } nohz ____cacheline_aligned;
 #endif
 
@@ -12085,26 +12145,113 @@ update_next_balance(struct sched_domain *sd, unsigned long *next_balance)
 		*next_balance = next;
 }
 
-#ifdef CONFIG_SCHED_WALT
-static inline bool min_cap_cluster_has_misfit_task(void)
+/*
+ * active_load_balance_cpu_stop is run by cpu stopper. It pushes
+ * running tasks off the busiest CPU onto idle CPUs. It requires at
+ * least 1 task to be running on each physical CPU where possible, and
+ * avoids physical / logical imbalances.
+ */
+static int active_load_balance_cpu_stop(void *data)
 {
-	int cpu;
+	struct rq *busiest_rq = data;
+	int busiest_cpu = cpu_of(busiest_rq);
+	int target_cpu = busiest_rq->push_cpu;
+	struct rq *target_rq = cpu_rq(target_cpu);
+	struct sched_domain *sd = NULL;
+	struct task_struct *p = NULL;
+	struct rq_flags rf;
+	bool moved = false;
 
-	for_each_possible_cpu(cpu) {
-		if (!is_min_capacity_cpu(cpu))
-			break;
-		if (cpu_rq(cpu)->walt_stats.nr_big_tasks)
-			return true;
+	rq_lock_irq(busiest_rq, &rf);
+	/*
+	 * Between queueing the stop-work and running it is a hole in which
+	 * CPUs can become inactive. We should not move tasks from or to
+	 * inactive CPUs.
+	 */
+	if (!cpu_active(busiest_cpu) || !cpu_active(target_cpu))
+		goto out_unlock;
+
+	/* make sure the requested cpu hasn't gone down in the meantime */
+	if (unlikely(busiest_cpu != smp_processor_id() ||
+		     !busiest_rq->active_balance))
+		goto out_unlock;
+
+	/* Is there any task to move? */
+	if (busiest_rq->nr_running <= 1)
+		goto out_unlock;
+
+	/*
+	 * This condition is "impossible", if it occurs
+	 * we need to fix it. Originally reported by
+	 * Bjorn Helgaas on a 128-cpu setup.
+	 */
+	BUG_ON(busiest_rq == target_rq);
+	/* Search for an sd spanning us and the target CPU. */
+	rcu_read_lock();
+	for_each_domain(target_cpu, sd) {
+		if (cpumask_test_cpu(busiest_cpu, sched_domain_span(sd)))
+				break;
 	}
 
-	return false;
+	if (likely(sd)) {
+		struct lb_env env = {
+			.sd		= sd,
+			.dst_cpu	= target_cpu,
+			.dst_rq		= target_rq,
+			.src_cpu	= busiest_rq->cpu,
+			.src_rq		= busiest_rq,
+			.idle		= CPU_IDLE,
+			/*
+			 * can_migrate_task() doesn't need to compute new_dst_cpu
+			 * for active balancing. Since we have CPU_IDLE, but no
+			 * @dst_grpmask we need to make that test go away with
+			 * @flags.
+			 */
+			.flags		= LBF_ACTIVE_LB | LBF_DST_PINNED,
+			.migration_type	= migrate_task,
+			.imbalance	= 1,
+		};
+
+		schedstat_inc(sd->alb_count);
+		update_rq_clock(busiest_rq);
+
+		p = detach_one_task(&env);
+		if (p) {
+			schedstat_inc(sd->alb_pushed);
+			/* Active balancing done, reset the failure counter. */
+			sd->nr_balance_failed = 0;
+			moved = true;
+		} else {
+			schedstat_inc(sd->alb_failed);
+		}
+	}
+	rcu_read_unlock();
+out_unlock:
+	busiest_rq->active_balance = 0;
+	target_cpu = busiest_rq->push_cpu;
+	clear_reserved(target_cpu);
+	rq_unlock(busiest_rq, &rf);
+	if (p)
+		attach_one_task(target_rq, p);
+
+	local_irq_enable();
+
+	return 0;
 }
-#else
-static inline bool min_cap_cluster_has_misfit_task(void)
+
+static DEFINE_SPINLOCK(balancing);
+
+/*
+ * Scale the max load_balance interval with the number of CPUs in the system.
+ * This trades load-balance latency on larger machines for less cross talk.
+ */
+void update_max_interval(void)
 {
-	return false;
+	unsigned int available_cpus;
+	available_cpus = num_online_cpus();
+
+	max_load_balance_interval = HZ*available_cpus/10;
 }
-#endif
 
 static inline void update_newidle_stats(struct sched_domain *sd, unsigned int success)
 {
@@ -12141,29 +12288,646 @@ static inline void update_newidle_stats(struct sched_domain *sd, unsigned int su
 	}
 }
 
-/*
- * newidle_balance is called by schedule() if this_cpu is about to become
- * idle. Attempts to pull tasks from other CPUs.
- */
-static bool
+static inline bool
 update_newidle_cost(struct sched_domain *sd, u64 cost, unsigned int success)
 {
-	if (cost > sd->max_newidle_lb_cost) {
-		sd->max_newidle_lb_cost = cost;
-		sd->last_decay_max_lb_cost = jiffies;
-	} else if (time_after(jiffies, sd->last_decay_max_lb_cost + HZ)) {
-		sd->max_newidle_lb_cost = (sd->max_newidle_lb_cost * 253) / 256;
-		sd->last_decay_max_lb_cost = jiffies;
-		return true;
-	}
+	unsigned long next_decay = sd->last_decay_max_lb_cost + HZ;
+	unsigned long now = jiffies;
 
 	if (cost)
 		update_newidle_stats(sd, success);
 
+	if (cost > sd->max_newidle_lb_cost) {
+		/*
+		 * Track max cost of a domain to make sure to not delay the
+		 * next wakeup on the CPU.
+		 */
+		sd->max_newidle_lb_cost = cost;
+		sd->last_decay_max_lb_cost = now;
+
+	} else if (time_after(now, next_decay)) {
+		/*
+		 * Decay the newidle max times by ~1% per second to ensure that
+		 * it is not outdated and the current max cost is actually
+		 * shorter.
+		 */
+		sd->max_newidle_lb_cost = (sd->max_newidle_lb_cost * 253) / 256;
+		sd->last_decay_max_lb_cost = now;
+		return true;
+	}
+
 	return false;
 }
 
+/*
+ * It checks each scheduling domain to see if it is due to be balanced,
+ * and initiates a balancing operation if so.
+ *
+ * Balancing parameters are set up in init_sched_domains.
+ */
+static void rebalance_domains(struct rq *rq, enum cpu_idle_type idle)
+{
+	int continue_balancing = 1;
+	int cpu = rq->cpu;
+	int busy = idle != CPU_IDLE && !idle_cpu(cpu);
+	unsigned long interval;
+	struct sched_domain *sd;
+	/* Earliest time when we have to do rebalance again */
+	unsigned long next_balance = jiffies + 60*HZ;
+	int update_next_balance = 0;
+	int need_serialize, need_decay = 0;
+	u64 max_cost = 0;
+
+	rcu_read_lock();
+	for_each_domain(cpu, sd) {
+		/*
+		 * Decay the newidle max times here because this is a regular
+		 * visit to all the domains. Decay ~1% per second.
+		 */
+		need_decay = update_newidle_cost(sd, 0, 0);
+		max_cost += sd->max_newidle_lb_cost;
+#ifdef CONFIG_SCHED_WALT
+		if (energy_aware() && !sd_overutilized(sd))
+			continue;
+#endif
+		/*
+		 * Stop the load balance at this level. There is another
+		 * CPU in our sched group which is doing load balancing more
+		 * actively.
+		 */
+		if (!continue_balancing) {
+			if (need_decay)
+				continue;
+			break;
+		}
+
+		interval = get_sd_balance_interval(sd, busy);
+
+		need_serialize = sd->flags & SD_SERIALIZE;
+		if (need_serialize) {
+			if (!spin_trylock(&balancing))
+				goto out;
+		}
+
+		if (time_after_eq(jiffies, sd->last_balance + interval)) {
+			if (load_balance(cpu, rq, sd, idle, &continue_balancing)) {
+				/*
+				 * The LBF_DST_PINNED logic could have changed
+				 * env->dst_cpu, so we can't know our idle
+				 * state even if we migrated tasks. Update it.
+				 */
+				idle = idle_cpu(cpu) ? CPU_IDLE : CPU_NOT_IDLE;
+				busy = idle != CPU_IDLE && !idle_cpu(cpu);
+			}
+			sd->last_balance = jiffies;
+			interval = get_sd_balance_interval(sd, busy);
+		}
+		if (need_serialize)
+			spin_unlock(&balancing);
+out:
+		if (time_after(next_balance, sd->last_balance + interval)) {
+			next_balance = sd->last_balance + interval;
+			update_next_balance = 1;
+		}
+	}
+	if (need_decay) {
+		/*
+		 * Ensure the rq-wide value also decays but keep it at a
+		 * reasonable floor to avoid funnies with rq->avg_idle.
+		 */
+		rq->max_idle_balance_cost =
+			max((u64)sysctl_sched_migration_cost, max_cost);
+	}
+	rcu_read_unlock();
+
+	/*
+	 * next_balance will be updated only when there is a need.
+	 * When the cpu is attached to null domain for ex, it will not be
+	 * updated.
+	 */
+	if (likely(update_next_balance))
+		rq->next_balance = next_balance;
+}
+
+static inline int on_null_domain(struct rq *rq)
+{
+	return unlikely(!rcu_dereference_sched(rq->sd));
+}
+
 #ifdef CONFIG_NO_HZ_COMMON
+static inline int find_energy_aware_new_ilb(void)
+{
+	int ilb = nr_cpu_ids;
+	struct sched_domain *sd;
+	int cpu = raw_smp_processor_id();
+	cpumask_t idle_cpus, tmp_cpus;
+	struct sched_group *sg;
+	unsigned long ref_cap = capacity_orig_of(cpu);
+	unsigned long best_cap = 0, best_cap_cpu = -1;
+
+	rcu_read_lock();
+	sd = rcu_dereference(per_cpu(sd_asym_cpucapacity, cpu));
+	if (!sd)
+		goto out;
+
+	cpumask_and(&idle_cpus, nohz.idle_cpus_mask,
+			housekeeping_cpumask(HK_FLAG_MISC));
+#ifdef CONFIG_SCHED_WALT
+	cpumask_andnot(&idle_cpus, &idle_cpus, cpu_isolated_mask);
+#endif
+	sg = sd->groups;
+	do {
+		int i;
+		unsigned long cap;
+
+		cpumask_and(&tmp_cpus, &idle_cpus, sched_group_span(sg));
+		i = cpumask_first(&tmp_cpus);
+
+		/* This sg did not have any idle CPUs */
+		if (i >= nr_cpu_ids)
+			continue;
+
+		cap = capacity_orig_of(i);
+
+		/* The first preference is for the same capacity CPU */
+		if (cap == ref_cap) {
+			ilb = i;
+			break;
+		}
+
+		/*
+		 * When there are no idle CPUs in the same capacity group,
+		 * we find the next best capacity CPU.
+		 */
+		if (best_cap > ref_cap) {
+			if (cap > ref_cap && cap < best_cap) {
+				best_cap = cap;
+				best_cap_cpu = i;
+			}
+			continue;
+		}
+
+		if (cap > best_cap) {
+			best_cap = cap;
+			best_cap_cpu = i;
+		}
+
+	} while (sg = sg->next, sg != sd->groups);
+
+	if (best_cap_cpu != -1)
+		ilb = best_cap_cpu;
+out:
+	rcu_read_unlock();
+	return ilb;
+}
+
+/*
+ * idle load balancing details
+ * - When one of the busy CPUs notice that there may be an idle rebalancing
+ *   needed, they will kick the idle load balancer, which then does idle
+ *   load balancing for all the idle CPUs.
+ * - HK_FLAG_MISC CPUs are used for this task, because HK_FLAG_SCHED not set
+ *   anywhere yet.
+ */
+
+static inline int find_new_ilb(void)
+{
+	int ilb, this_cpu = smp_processor_id();
+	const struct cpumask *hk_mask;
+
+	hk_mask = housekeeping_cpumask(HK_FLAG_MISC);
+
+	for_each_cpu_and(ilb, nohz.idle_cpus_mask, hk_mask) {
+		if (ilb == this_cpu)
+			continue;
+
+		if (idle_cpu(ilb))
+			return ilb;
+	}
+
+	return nr_cpu_ids;
+}
+
+/*
+ * Kick a CPU to do the nohz balancing, if it is time for it. We pick any
+ * idle CPU in the HK_FLAG_MISC housekeeping set (if there is one).
+ */
+static void kick_ilb(unsigned int flags)
+{
+	int ilb_cpu;
+
+	/*
+	 * Increase nohz.next_balance only when if full ilb is triggered but
+	 * not if we only update stats.
+	 */
+	if (flags & NOHZ_BALANCE_KICK)
+		nohz.next_balance = jiffies+1;
+
+	ilb_cpu = find_new_ilb();
+
+	if (ilb_cpu >= nr_cpu_ids)
+		return;
+
+	/*
+	 * Don't bother if no new NOHZ balance work items for ilb_cpu,
+	 * i.e. all bits in flags are already set in ilb_cpu.
+	 */
+	if ((atomic_read(nohz_flags(ilb_cpu)) & flags) == flags)
+		return;
+
+	flags = atomic_fetch_or(flags, nohz_flags(ilb_cpu));
+	if (flags & NOHZ_KICK_MASK)
+		return;
+
+	/*
+	 * This way we generate an IPI on the target CPU which
+	 * is idle. And the softirq performing nohz idle load balance
+	 * will be run before returning from the IPI.
+	 */
+	smp_call_function_single_async(ilb_cpu, &cpu_rq(ilb_cpu)->nohz_csd);
+}
+
+/*
+ * Current heuristic for kicking the idle load balancer in the presence
+ * of an idle cpu in the system.
+ *   - This rq has more than one task.
+ *   - This rq has at least one CFS task and the capacity of the CPU is
+ *     significantly reduced because of RT tasks or IRQs.
+ *   - At parent of LLC scheduler domain level, this cpu's scheduler group has
+ *     multiple busy cpu.
+ *   - For SD_ASYM_PACKING, if the lower numbered cpu's in the scheduler
+ *     domain span are idle.
+ */
+static void nohz_balancer_kick(struct rq *rq)
+{
+	unsigned long now = jiffies;
+	struct sched_domain_shared *sds;
+	struct sched_domain *sd;
+	int nr_busy, i, cpu = rq->cpu;
+	unsigned int flags = 0;
+
+	if (unlikely(rq->idle_balance))
+		return;
+
+	/*
+	 * We may be recently in ticked or tickless idle mode. At the first
+	 * busy tick after returning from idle, we will update the busy stats.
+	 */
+	nohz_balance_exit_idle(rq);
+
+	if (READ_ONCE(nohz.has_blocked) &&
+	    time_after(now, READ_ONCE(nohz.next_blocked)))
+		flags = NOHZ_STATS_KICK;
+
+	/*
+	 * Most of the time system is not 100% busy. i.e nohz.nr_cpus > 0
+	 * Skip the read if time is not due.
+	 *
+	 * If none are in tickless mode, there maybe a narrow window
+	 * (28 jiffies, HZ=1000) where flags maybe set and kick_ilb called.
+	 * But idle load balancing is not done as find_new_ilb fails.
+	 * That's very rare. So read nohz.nr_cpus only if time is due.
+	 */
+	if (time_before(now, nohz.next_balance))
+		goto out;
+
+	/*
+	 * None are in tickless mode and hence no need for NOHZ idle load
+	 * balancing
+	 */
+	if (unlikely(cpumask_empty(nohz.idle_cpus_mask)))
+		return;
+
+	if (rq->nr_running >= 2) {
+		flags = NOHZ_STATS_KICK | NOHZ_BALANCE_KICK;
+		goto out;
+	}
+
+	sd = rcu_dereference(per_cpu(sd_asym_packing, cpu));
+	if (sd) {
+		/*
+		 * When ASYM_PACKING; see if there's a more preferred CPU
+		 * currently idle; in which case, kick the ILB to move tasks
+		 * around.
+		 */
+		for_each_cpu_and(i, sched_domain_span(sd), nohz.idle_cpus_mask) {
+			if (sched_asym_prefer(i, cpu)) {
+				flags |= NOHZ_STATS_KICK | NOHZ_BALANCE_KICK;
+				goto out;
+			}
+		}
+	}
+
+	sd = rcu_dereference(per_cpu(sd_asym_cpucapacity, cpu));
+	if (sd) {
+		/*
+		 * When ASYM_CPUCAPACITY; see if there's a higher capacity CPU
+		 * to run the misfit task on.
+		 */
+		if (check_misfit_status(rq))
+			flags |= NOHZ_STATS_KICK | NOHZ_BALANCE_KICK;
+
+		/*
+		 * For asymmetric systems, we do not want to nicely balance
+		 * cache use, instead we want to embrace asymmetry and only
+		 * ensure tasks have enough CPU capacity.
+		 *
+		 * Skip the LLC logic because it's not relevant in that case.
+		 */
+		goto out;
+	}
+
+	sds = rcu_dereference(per_cpu(sd_llc_shared, cpu));
+	if (sds) {
+		/*
+		 * If there is an imbalance between LLC domains (IOW we could
+		 * increase the overall cache use), we need some less-loaded LLC
+		 * domain to pull some load. Likewise, we may need to spread
+		 * load within the current LLC domain (e.g. packed SMT cores but
+		 * other CPUs are idle). We can't really know from here how busy
+		 * the others are - so just get a nohz balance going if it looks
+		 * like this LLC domain has tasks we could move.
+		 */
+		nr_busy = atomic_read(&sds->nr_busy_cpus);
+		if (nr_busy > 1)
+			flags |= NOHZ_STATS_KICK | NOHZ_BALANCE_KICK;
+	}
+out:
+	if (READ_ONCE(nohz.needs_update))
+		flags |= NOHZ_NEXT_KICK;
+
+	if (flags)
+		kick_ilb(flags);
+}
+
+static void set_cpu_sd_state_busy(int cpu)
+{
+	struct sched_domain *sd;
+
+	sd = rcu_dereference(per_cpu(sd_llc, cpu));
+
+	if (!sd || !sd->nohz_idle)
+		return;
+	sd->nohz_idle = 0;
+
+	atomic_inc(&sd->shared->nr_busy_cpus);
+}
+
+void nohz_balance_exit_idle(struct rq *rq)
+{
+	SCHED_WARN_ON(rq != this_rq());
+
+	if (likely(!rq->nohz_tick_stopped))
+		return;
+
+	rq->nohz_tick_stopped = 0;
+	cpumask_clear_cpu(rq->cpu, nohz.idle_cpus_mask);
+
+	set_cpu_sd_state_busy(rq->cpu);
+}
+
+static void set_cpu_sd_state_idle(int cpu)
+{
+	struct sched_domain *sd;
+
+	sd = rcu_dereference(per_cpu(sd_llc, cpu));
+
+	if (!sd || sd->nohz_idle)
+		return;
+	sd->nohz_idle = 1;
+
+	atomic_dec(&sd->shared->nr_busy_cpus);
+}
+
+/*
+ * This routine will record that the CPU is going idle with tick stopped.
+ * This info will be used in performing idle load balancing in the future.
+ */
+void nohz_balance_enter_idle(int cpu)
+{
+	struct rq *rq = cpu_rq(cpu);
+
+	SCHED_WARN_ON(cpu != smp_processor_id());
+
+	if (!cpu_active(cpu)) {
+		/*
+		 * A CPU can be paused while it is idle with it's tick
+		 * stopped. nohz_balance_exit_idle() should be called
+		 * from the local CPU, so it can't be called during
+		 * pause. This results in paused CPU participating in
+		 * the nohz idle balance, which should be avoided.
+		 *
+		 * When the paused CPU exits idle and enters again,
+		 * exempt the paused CPU from nohz_balance_exit_idle.
+		 */
+		nohz_balance_exit_idle(rq);
+		return;
+	}
+
+	/* Spare idle load balancing on CPUs that don't want to be disturbed: */
+	if (!housekeeping_cpu(cpu, HK_FLAG_SCHED))
+		return;
+
+	/*
+	 * Can be set safely without rq->lock held
+	 * If a clear happens, it will have evaluated last additions because
+	 * rq->lock is held during the check and the clear
+	 */
+	rq->has_blocked_load = 1;
+
+	/*
+	 * The tick is still stopped but load could have been added in the
+	 * meantime. We set the nohz.has_blocked flag to trig a check of the
+	 * *_avg. The CPU is already part of nohz.idle_cpus_mask so the clear
+	 * of nohz.has_blocked can only happen after checking the new load
+	 */
+	if (rq->nohz_tick_stopped)
+		goto out;
+
+	/* If we're a completely isolated CPU, we don't play: */
+	if (on_null_domain(rq))
+		return;
+
+	rq->nohz_tick_stopped = 1;
+
+	cpumask_set_cpu(cpu, nohz.idle_cpus_mask);
+
+	/*
+	 * Ensures that if nohz_idle_balance() fails to observe our
+	 * @idle_cpus_mask store, it must observe the @has_blocked
+	 * and @needs_update stores.
+	 */
+	smp_mb__after_atomic();
+
+	set_cpu_sd_state_idle(cpu);
+
+	WRITE_ONCE(nohz.needs_update, 1);
+out:
+	/*
+	 * Each time a cpu enter idle, we assume that it has blocked load and
+	 * enable the periodic update of the load of idle cpus
+	 */
+	WRITE_ONCE(nohz.has_blocked, 1);
+}
+
+static bool update_nohz_stats(struct rq *rq)
+{
+	unsigned int cpu = rq->cpu;
+
+	if (!rq->has_blocked_load)
+		return false;
+
+	if (!cpumask_test_cpu(cpu, nohz.idle_cpus_mask))
+		return false;
+
+	if (!time_after(jiffies, READ_ONCE(rq->last_blocked_load_update_tick)))
+		return true;
+
+	update_blocked_averages(cpu);
+
+	return rq->has_blocked_load;
+}
+
+/*
+ * Internal function that runs load balance for all idle cpus. The load balance
+ * can be a simple update of blocked load or a complete load balance with
+ * tasks movement depending of flags.
+ */
+static void _nohz_idle_balance(struct rq *this_rq, unsigned int flags,
+			       enum cpu_idle_type idle)
+{
+	/* Earliest time when we have to do rebalance again */
+	unsigned long now = jiffies;
+	unsigned long next_balance = now + 60*HZ;
+	bool has_blocked_load = false;
+	int update_next_balance = 0;
+	int this_cpu = this_rq->cpu;
+	int balance_cpu;
+	struct rq *rq;
+
+	SCHED_WARN_ON((flags & NOHZ_KICK_MASK) == NOHZ_BALANCE_KICK);
+
+	/*
+	 * We assume there will be no idle load after this update and clear
+	 * the has_blocked flag. If a cpu enters idle in the mean time, it will
+	 * set the has_blocked flag and trigger another update of idle load.
+	 * Because a cpu that becomes idle, is added to idle_cpus_mask before
+	 * setting the flag, we are sure to not clear the state and not
+	 * check the load of an idle cpu.
+	 *
+	 * Same applies to idle_cpus_mask vs needs_update.
+	 */
+	if (flags & NOHZ_STATS_KICK)
+		WRITE_ONCE(nohz.has_blocked, 0);
+	if (flags & NOHZ_NEXT_KICK)
+		WRITE_ONCE(nohz.needs_update, 0);
+
+	/*
+	 * Ensures that if we miss the CPU, we must see the has_blocked
+	 * store from nohz_balance_enter_idle().
+	 */
+	smp_mb();
+
+	for_each_cpu(balance_cpu, nohz.idle_cpus_mask) {
+		if (!idle_cpu(balance_cpu))
+			continue;
+
+		/*
+		 * If this CPU gets work to do, stop the load balancing
+		 * work being done for other CPUs. Next load
+		 * balancing owner will pick it up.
+		 */
+		if (!idle_cpu(this_cpu) && need_resched()) {
+			if (flags & NOHZ_STATS_KICK)
+				has_blocked_load = true;
+			if (flags & NOHZ_NEXT_KICK)
+				WRITE_ONCE(nohz.needs_update, 1);
+			goto abort;
+		}
+
+		rq = cpu_rq(balance_cpu);
+
+		if (flags & NOHZ_STATS_KICK)
+			has_blocked_load |= update_nohz_stats(rq);
+
+		/*
+		 * If time for next balance is due,
+		 * do the balance.
+		 */
+		if (time_after_eq(jiffies, rq->next_balance)) {
+			struct rq_flags rf;
+
+			rq_lock_irqsave(rq, &rf);
+			update_rq_clock(rq);
+			rq_unlock_irqrestore(rq, &rf);
+
+			if (flags & NOHZ_BALANCE_KICK)
+				rebalance_domains(rq, CPU_IDLE);
+		}
+
+		if (time_after(next_balance, rq->next_balance)) {
+			next_balance = rq->next_balance;
+			update_next_balance = 1;
+		}
+	}
+
+	/*
+	 * next_balance will be updated only when there is a need.
+	 * When the CPU is attached to null domain for ex, it will not be
+	 * updated.
+	 */
+	if (likely(update_next_balance))
+		nohz.next_balance = next_balance;
+
+	if (flags & NOHZ_STATS_KICK)
+		WRITE_ONCE(nohz.next_blocked,
+			   now + msecs_to_jiffies(LOAD_AVG_PERIOD));
+
+abort:
+	/* There is still blocked load, enable periodic update */
+	if (has_blocked_load)
+		WRITE_ONCE(nohz.has_blocked, 1);
+}
+
+/*
+ * In CONFIG_NO_HZ_COMMON case, the idle balance kickee will do the
+ * rebalancing for all the cpus for whom scheduler ticks are stopped.
+ */
+static bool nohz_idle_balance(struct rq *this_rq, enum cpu_idle_type idle)
+{
+	unsigned int flags = this_rq->nohz_idle_balance;
+
+	if (!flags)
+		return false;
+
+	this_rq->nohz_idle_balance = 0;
+
+	if (idle != CPU_IDLE)
+		return false;
+
+	_nohz_idle_balance(this_rq, flags, idle);
+
+	return true;
+}
+
+/*
+ * Check if we need to run the ILB for updating blocked load before entering
+ * idle state.
+ */
+void nohz_run_idle_balance(int cpu)
+{
+	unsigned int flags;
+
+	flags = atomic_fetch_andnot(NOHZ_NEWILB_KICK, nohz_flags(cpu));
+
+	/*
+	 * Update the blocked load only if no SCHED_SOFTIRQ is about to happen
+	 * (ie NOHZ_STATS_KICK set) and will do the same.
+	 */
+	if ((flags == NOHZ_NEWILB_KICK) && !need_resched())
+		_nohz_idle_balance(cpu_rq(cpu), NOHZ_STATS_KICK, CPU_IDLE);
+}
+
 static void nohz_newidle_balance(struct rq *this_rq)
 {
 	int this_cpu = this_rq->cpu;
@@ -12175,16 +12939,53 @@ static void nohz_newidle_balance(struct rq *this_rq)
 	if (!housekeeping_cpu(this_cpu, HK_FLAG_SCHED))
 		return;
 
+	/* Will wake up very soon. No time for doing anything else*/
 	if (this_rq->avg_idle < sysctl_sched_migration_cost)
 		return;
 
-	if (time_before(jiffies, READ_ONCE(this_rq->next_balance)))
+	/* Don't need to update blocked load of idle CPUs*/
+	if (!READ_ONCE(nohz.has_blocked) ||
+	    time_before(jiffies, READ_ONCE(nohz.next_blocked)))
 		return;
 
-	nohz_balancer_kick(true);
+	/*
+	 * Set the need to trigger ILB in order to update blocked load
+	 * before entering idle state.
+	 */
+	atomic_or(NOHZ_NEWILB_KICK, nohz_flags(this_cpu));
+}
+
+#else /* !CONFIG_NO_HZ_COMMON */
+static inline void nohz_balancer_kick(struct rq *rq) { }
+
+static inline bool nohz_idle_balance(struct rq *this_rq, enum cpu_idle_type idle)
+{
+	return false;
+}
+
+static inline void nohz_newidle_balance(struct rq *this_rq) { }
+#endif /* CONFIG_NO_HZ_COMMON */
+
+#ifdef CONFIG_SCHED_WALT
+static bool silver_has_big_tasks(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		if (!is_min_capacity_cpu(cpu))
+			break;
+
+		if (walt_big_tasks(cpu))
+			return true;
+	}
+
+	return false;
 }
 #else
-static inline void nohz_newidle_balance(struct rq *this_rq) { }
+static inline bool silver_has_big_tasks(void)
+{
+	return false;
+}
 #endif
 
 /*
@@ -12341,485 +13142,13 @@ out:
 }
 
 /*
- * active_load_balance_cpu_stop is run by cpu stopper. It pushes
- * running tasks off the busiest CPU onto idle CPUs. It requires at
- * least 1 task to be running on each physical CPU where possible, and
- * avoids physical / logical imbalances.
- */
-static int active_load_balance_cpu_stop(void *data)
-{
-	struct rq *busiest_rq = data;
-	int busiest_cpu = cpu_of(busiest_rq);
-	int target_cpu = busiest_rq->push_cpu;
-	struct rq *target_rq = cpu_rq(target_cpu);
-	struct sched_domain *sd = NULL;
-	struct task_struct *p = NULL;
-	struct rq_flags rf;
-	bool moved = false;
-
-	rq_lock_irq(busiest_rq, &rf);
-	/*
-	 * Between queueing the stop-work and running it is a hole in which
-	 * CPUs can become inactive. We should not move tasks from or to
-	 * inactive CPUs.
-	 */
-	if (!cpu_active(busiest_cpu) || !cpu_active(target_cpu))
-		goto out_unlock;
-
-	/* make sure the requested cpu hasn't gone down in the meantime */
-	if (unlikely(busiest_cpu != smp_processor_id() ||
-		     !busiest_rq->active_balance))
-		goto out_unlock;
-
-	/* Is there any task to move? */
-	if (busiest_rq->nr_running <= 1)
-		goto out_unlock;
-
-	/*
-	 * This condition is "impossible", if it occurs
-	 * we need to fix it. Originally reported by
-	 * Bjorn Helgaas on a 128-cpu setup.
-	 */
-	BUG_ON(busiest_rq == target_rq);
-	/* Search for an sd spanning us and the target CPU. */
-	rcu_read_lock();
-	for_each_domain(target_cpu, sd) {
-		if (cpumask_test_cpu(busiest_cpu, sched_domain_span(sd)))
-				break;
-	}
-
-	if (likely(sd)) {
-		struct lb_env env = {
-			.sd		= sd,
-			.dst_cpu	= target_cpu,
-			.dst_rq		= target_rq,
-			.src_cpu	= busiest_rq->cpu,
-			.src_rq		= busiest_rq,
-			.idle		= CPU_IDLE,
-			/*
-			 * can_migrate_task() doesn't need to compute new_dst_cpu
-			 * for active balancing. Since we have CPU_IDLE, but no
-			 * @dst_grpmask we need to make that test go away with
-			 * @flags.
-			 */
-			.flags		= LBF_ACTIVE_LB | LBF_DST_PINNED,
-			.migration_type	= migrate_task,
-			.imbalance	= 1,
-		};
-
-		schedstat_inc(sd->alb_count);
-		update_rq_clock(busiest_rq);
-
-		p = detach_one_task(&env);
-		if (p) {
-			schedstat_inc(sd->alb_pushed);
-			/* Active balancing done, reset the failure counter. */
-			sd->nr_balance_failed = 0;
-			moved = true;
-		} else {
-			schedstat_inc(sd->alb_failed);
-		}
-	}
-	rcu_read_unlock();
-out_unlock:
-	busiest_rq->active_balance = 0;
-	target_cpu = busiest_rq->push_cpu;
-	clear_reserved(target_cpu);
-	rq_unlock(busiest_rq, &rf);
-	if (p)
-		attach_one_task(target_rq, p);
-
-	local_irq_enable();
-
-	return 0;
-}
-
-static inline int on_null_domain(struct rq *rq)
-{
-	return unlikely(!rcu_dereference_sched(rq->sd));
-}
-
-#ifdef CONFIG_NO_HZ_COMMON
-/*
- * idle load balancing details
- * - When one of the busy CPUs notice that there may be an idle rebalancing
- *   needed, they will kick the idle load balancer, which then does idle
- *   load balancing for all the idle CPUs.
- */
-
-static inline int find_new_ilb(void)
-{
-	int ilb = nr_cpu_ids;
-	struct sched_domain *sd;
-	int cpu = raw_smp_processor_id();
-	struct rq *rq = cpu_rq(cpu);
-	cpumask_t cpumask;
-
-	rcu_read_lock();
-	sd = rcu_dereference_check_sched_domain(rq->sd);
-	if (sd) {
-		cpumask_and(&cpumask, nohz.idle_cpus_mask,
-				sched_domain_span(sd));
-		cpumask_andnot(&cpumask, &cpumask,
-				cpu_isolated_mask);
-		ilb = cpumask_first(&cpumask);
-	}
-	rcu_read_unlock();
-
-	if (sd && (ilb >= nr_cpu_ids || !idle_cpu(ilb))) {
-		if (!energy_aware() ||
-				(capacity_orig_of(cpu) ==
-				cpu_rq(cpu)->rd->max_cpu_capacity.val ||
-				cpu_overutilized(cpu))) {
-			cpumask_andnot(&cpumask, nohz.idle_cpus_mask,
-					cpu_isolated_mask);
-			ilb = cpumask_first(&cpumask);
-		}
-	}
-
-	if (ilb < nr_cpu_ids && idle_cpu(ilb))
-		return ilb;
-
-	return nr_cpu_ids;
-}
-
-/*
- * Kick a CPU to do the nohz balancing, if it is time for it. We pick the
- * nohz_load_balancer CPU (if there is one) otherwise fallback to any idle
- * CPU (if there is one).
- */
-static void nohz_balancer_kick(bool only_update)
-{
-	int ilb_cpu;
-	unsigned int flags = NOHZ_BALANCE_KICK;
-
-	nohz.next_balance++;
-
-	ilb_cpu = find_new_ilb();
-
-	if (ilb_cpu >= nr_cpu_ids)
-		return;
-
-	if (only_update)
-		flags |= NOHZ_STATS_KICK;
-
-	/*
-	 * Don't bother if no new NOHZ balance work items for ilb_cpu,
-	 * i.e. all bits in flags are already set in ilb_cpu.
-	 */
-	if ((READ_ONCE(*nohz_flags(ilb_cpu)) & flags) == flags)
-		return;
-
-	if (test_and_set_bit(NOHZ_BALANCE_KICK, nohz_flags(ilb_cpu)))
-		return;
-
-	if (only_update)
-		set_bit(NOHZ_STATS_KICK, nohz_flags(ilb_cpu));
-
-	/*
-	 * Use smp_send_reschedule() instead of resched_cpu().
-	 * This way we generate a sched IPI on the target cpu which
-	 * is idle. And the softirq performing nohz idle load balance
-	 * will be run before returning from the IPI.
-	 */
-	trace_sched_load_balance_nohz_kick(smp_processor_id(), ilb_cpu);
-	smp_send_reschedule(ilb_cpu);
-}
-
-void nohz_balance_exit_idle(unsigned int cpu)
-{
-	if (unlikely(test_bit(NOHZ_TICK_STOPPED, nohz_flags(cpu)))) {
-		/*
-		 * Completely isolated CPUs don't ever set, so we must test.
-		 */
-		if (likely(cpumask_test_cpu(cpu, nohz.idle_cpus_mask))) {
-			cpumask_clear_cpu(cpu, nohz.idle_cpus_mask);
-			atomic_dec(&nohz.nr_cpus);
-		}
-		clear_bit(NOHZ_TICK_STOPPED, nohz_flags(cpu));
-	}
-}
-
-static inline void set_cpu_sd_state_busy(void)
-{
-	struct sched_domain *sd;
-	int cpu = smp_processor_id();
-
-	sd = rcu_dereference(per_cpu(sd_llc, cpu));
-
-	if (!sd || !sd->nohz_idle)
-		return;
-	sd->nohz_idle = 0;
-
-	atomic_inc(&sd->shared->nr_busy_cpus);
-}
-
-void set_cpu_sd_state_idle(void)
-{
-	struct sched_domain *sd;
-	int cpu = smp_processor_id();
-
-	sd = rcu_dereference(per_cpu(sd_llc, cpu));
-
-	if (!sd || sd->nohz_idle)
-		return;
-	sd->nohz_idle = 1;
-
-	atomic_dec(&sd->shared->nr_busy_cpus);
-}
-
-/*
- * This routine will record that the cpu is going idle with tick stopped.
- * This info will be used in performing idle load balancing in the future.
- */
-void nohz_balance_enter_idle(int cpu)
-{
-	/*
-	 * If this cpu is going down, then nothing needs to be done.
-	 */
-	if (!cpu_active(cpu))
-		return;
-
-	/* Spare idle load balancing on CPUs that don't want to be disturbed: */
-	if (!housekeeping_cpu(cpu, HK_FLAG_SCHED))
-		return;
-
-	if (test_bit(NOHZ_TICK_STOPPED, nohz_flags(cpu)))
-		return;
-
-	/*
-	 * If we're a completely isolated CPU, we don't play.
-	 */
-	if (on_null_domain(cpu_rq(cpu)) || cpu_isolated(cpu))
-		return;
-
-	cpumask_set_cpu(cpu, nohz.idle_cpus_mask);
-	atomic_inc(&nohz.nr_cpus);
-	set_bit(NOHZ_TICK_STOPPED, nohz_flags(cpu));
-}
-#else
-static inline void nohz_balancer_kick(bool only_update) {}
-#endif
-
-static DEFINE_SPINLOCK(balancing);
-
-/*
- * Scale the max load_balance interval with the number of CPUs in the system.
- * This trades load-balance latency on larger machines for less cross talk.
- */
-void update_max_interval(void)
-{
-	cpumask_t avail_mask;
-	unsigned int available_cpus;
-
-	cpumask_andnot(&avail_mask, cpu_online_mask, cpu_isolated_mask);
-	available_cpus = cpumask_weight(&avail_mask);
-
-	max_load_balance_interval = HZ*available_cpus/10;
-}
-
-/*
- * It checks each scheduling domain to see if it is due to be balanced,
- * and initiates a balancing operation if so.
- *
- * Balancing parameters are set up in init_sched_domains.
- */
-static void rebalance_domains(struct rq *rq, enum cpu_idle_type idle)
-{
-	int continue_balancing = 1;
-	int cpu = rq->cpu;
-	int busy = idle != CPU_IDLE && !idle_cpu(cpu);
-	unsigned long interval;
-	struct sched_domain *sd;
-	/* Earliest time when we have to do rebalance again */
-	unsigned long next_balance = jiffies + 60*HZ;
-	int update_next_balance = 0;
-	int need_serialize, need_decay = 0;
-	u64 max_cost = 0;
-
-	rcu_read_lock();
-	for_each_domain(cpu, sd) {
-		/*
-		 * Decay the newidle max times here because this is a regular
-		 * visit to all the domains. Decay ~1% per second.
-		 */
-		need_decay = update_newidle_cost(sd, 0, 0);
-		max_cost += sd->max_newidle_lb_cost;
-#ifdef CONFIG_SCHED_WALT
-		if (energy_aware() && !sd_overutilized(sd))
-			continue;
-#endif
-		/*
-		 * Stop the load balance at this level. There is another
-		 * CPU in our sched group which is doing load balancing more
-		 * actively.
-		 */
-		if (!continue_balancing) {
-			if (need_decay)
-				continue;
-			break;
-		}
-
-		interval = get_sd_balance_interval(sd, busy);
-
-		need_serialize = sd->flags & SD_SERIALIZE;
-		if (need_serialize) {
-			if (!spin_trylock(&balancing))
-				goto out;
-		}
-
-		if (time_after_eq(jiffies, sd->last_balance + interval)) {
-			if (load_balance(cpu, rq, sd, idle, &continue_balancing)) {
-				/*
-				 * The LBF_DST_PINNED logic could have changed
-				 * env->dst_cpu, so we can't know our idle
-				 * state even if we migrated tasks. Update it.
-				 */
-				idle = idle_cpu(cpu) ? CPU_IDLE : CPU_NOT_IDLE;
-				busy = idle != CPU_IDLE && !idle_cpu(cpu);
-			}
-			sd->last_balance = jiffies;
-			interval = get_sd_balance_interval(sd, busy);
-		}
-		if (need_serialize)
-			spin_unlock(&balancing);
-out:
-		if (time_after(next_balance, sd->last_balance + interval)) {
-			next_balance = sd->last_balance + interval;
-			update_next_balance = 1;
-		}
-	}
-	if (need_decay) {
-		/*
-		 * Ensure the rq-wide value also decays but keep it at a
-		 * reasonable floor to avoid funnies with rq->avg_idle.
-		 */
-		rq->max_idle_balance_cost =
-			max((u64)sysctl_sched_migration_cost, max_cost);
-	}
-	rcu_read_unlock();
-
-	/*
-	 * next_balance will be updated only when there is a need.
-	 * When the cpu is attached to null domain for ex, it will not be
-	 * updated.
-	 */
-	if (likely(update_next_balance))
-		rq->next_balance = next_balance;
-}
-
-#ifdef CONFIG_NO_HZ_COMMON
-/*
- * In CONFIG_NO_HZ_COMMON case, the idle balance kickee will do the
- * rebalancing for all the cpus for whom scheduler ticks are stopped.
- */
-static void nohz_idle_balance(struct rq *this_rq, enum cpu_idle_type idle)
-{
-	int this_cpu = this_rq->cpu;
-	struct rq *rq;
-	struct sched_domain *sd;
-	int balance_cpu;
-	/* Earliest time when we have to do rebalance again */
-	unsigned long next_balance = jiffies + 60*HZ;
-	int update_next_balance = 0;
-	cpumask_t cpus;
-
-	if (idle != CPU_IDLE ||
-	    !test_bit(NOHZ_BALANCE_KICK, nohz_flags(this_cpu)))
-		goto end;
-
-	/*
-	 * This cpu is going to update the blocked load of idle CPUs either
-	 * before doing a rebalancing or just to keep metrics up to date. we
-	 * can safely update the next update timestamp
-	 */
-	rcu_read_lock();
-	sd = rcu_dereference(this_rq->sd);
-	/*
-	 * Check whether there is a sched_domain available for this cpu.
-	 * The last other cpu can have been unplugged since the ILB has been
-	 * triggered and the sched_domain can now be null. The idle balance
-	 * sequence will quickly be aborted as there is no more idle CPUs
-	 */
-	if (sd)
-		nohz.next_update = jiffies + msecs_to_jiffies(LOAD_AVG_PERIOD);
-	rcu_read_unlock();
-
-	cpumask_andnot(&cpus, nohz.idle_cpus_mask, cpu_isolated_mask);
-
-	for_each_cpu(balance_cpu, &cpus) {
-		if (balance_cpu == this_cpu || !idle_cpu(balance_cpu))
-			continue;
-
-		/*
-		 * If this cpu gets work to do, stop the load balancing
-		 * work being done for other cpus. Next load
-		 * balancing owner will pick it up.
-		 */
-		if (need_resched())
-			break;
-
-		rq = cpu_rq(balance_cpu);
-
-		/*
-		 * If time for next balance is due,
-		 * do the balance.
-		 */
-		if (time_after_eq(jiffies, rq->next_balance)) {
-			struct rq_flags rf;
-
-			rq_lock_irq(rq, &rf);
-			update_rq_clock(rq);
-			__update_blocked_averages(rq); 
-			rq_unlock_irq(rq, &rf);
-
-			/*
-			 * This idle load balance softirq may have been
-			 * triggered only to update the blocked load and shares
-			 * of idle CPUs (which we have just done for
-			 * balance_cpu). In that case skip the actual balance.
-			 */
-			if (!test_bit(NOHZ_STATS_KICK, nohz_flags(this_cpu)))
-				rebalance_domains(rq, idle);
-		}
-
-		if (time_after(next_balance, rq->next_balance)) {
-			next_balance = rq->next_balance;
-			update_next_balance = 1;
-		}
-	}
-
-	/*
-	 * next_balance will be updated only when there is a need.
-	 * When the CPU is attached to null domain for ex, it will not be
-	 * updated.
-	 */
-	if (likely(update_next_balance))
-		nohz.next_balance = next_balance;
-end:
-	clear_bit(NOHZ_BALANCE_KICK, nohz_flags(this_cpu));
-}
-#else
-static void nohz_idle_balance(struct rq *this_rq, enum cpu_idle_type idle) { }
-#endif
-
-/*
  * run_rebalance_domains is triggered when needed from the scheduler tick.
  * Also triggered for nohz idle balancing (with nohz_balancing_kick set).
  */
 static __latent_entropy void run_rebalance_domains(struct softirq_action *h)
 {
 	struct rq *this_rq = this_rq();
-	enum cpu_idle_type idle = this_rq->idle_balance ?
-						CPU_IDLE : CPU_NOT_IDLE;
-
-	/*
-	 * Since core isolation doesn't update nohz.idle_cpus_mask, there
-	 * is a possibility this nohz kicked cpu could be isolated. Hence
-	 * return if the cpu is isolated.
-	 */
-	if (cpu_isolated(this_rq->cpu))
-		return;
+	enum cpu_idle_type idle = this_rq->idle_balance;
 	/*
 	 * If this cpu has a pending nohz_balance_kick, then do the
 	 * balancing on behalf of the other idle cpus whose ticks are
@@ -12828,15 +13157,12 @@ static __latent_entropy void run_rebalance_domains(struct softirq_action *h)
 	 * load balance only within the local sched_domain hierarchy
 	 * and abort nohz_idle_balance altogether if we pull some load.
 	 */
-	nohz_idle_balance(this_rq, idle);
+	if (nohz_idle_balance(this_rq, idle))
+		return;
+
+	/* normal load balance */
 	update_blocked_averages(this_rq->cpu);
-#ifdef CONFIG_NO_HZ_COMMON
-	if (!test_bit(NOHZ_STATS_KICK, nohz_flags(this_rq->cpu)))
-		rebalance_domains(this_rq, idle);
-	clear_bit(NOHZ_STATS_KICK, nohz_flags(this_rq->cpu));
-#else
 	rebalance_domains(this_rq, idle);
-#endif
 }
 
 /*
@@ -12844,10 +13170,8 @@ static __latent_entropy void run_rebalance_domains(struct softirq_action *h)
  */
 void trigger_load_balance(struct rq *rq)
 {
-	/* Don't need to rebalance while attached to NULL domain or
-	 * cpu is isolated.
-	 */
-	if (unlikely(on_null_domain(rq)) || cpu_isolated(cpu_of(rq)))
+	/* Don't need to rebalance while attached to NULL domain */
+	if (unlikely(on_null_domain(rq)))
 		return;
 
 	if (time_after_eq(jiffies, rq->next_balance))
@@ -13492,11 +13816,9 @@ __init void init_sched_fair_class(void)
 
 #ifdef CONFIG_NO_HZ_COMMON
 	nohz.next_balance = jiffies;
-	nohz.next_update = jiffies;
+	nohz.next_blocked = jiffies;
 	zalloc_cpumask_var(&nohz.idle_cpus_mask, GFP_NOWAIT);
 #endif
-
-	alloc_eenv();
 #endif /* SMP */
 
 }
