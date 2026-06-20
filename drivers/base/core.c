@@ -1053,6 +1053,9 @@ static ssize_t online_store(struct device *dev, struct device_attribute *attr,
 	bool val;
 	int ret;
 
+	if (dev->bus && dev->bus->name && !strcmp(dev->bus->name, "cpu"))
+		return count;
+
 	ret = strtobool(buf, &val);
 	if (ret < 0)
 		return ret;
