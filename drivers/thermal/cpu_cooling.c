@@ -194,22 +194,8 @@ static int cpufreq_cooling_pm_notify(struct notifier_block *nb,
 			if (cpufreq_cdev->cpufreq_state ==
 				cpufreq_cdev->max_level) {
 				cpu = cpufreq_cdev->cpu_id;
-				/*
-				 * Unlock this lock before calling
-				 * schedule_isolate. as this could lead to
-				 * deadlock with hotplug path.
-				 */
-				mutex_unlock(&core_isolate_lock);
-				if (cpu_online(cpu) &&
-					!cpumask_test_and_set_cpu(cpu,
-					&cpus_isolated_by_thermal)) {
-					if (sched_isolate_cpu(cpu))
-						cpumask_clear_cpu(cpu,
-						&cpus_isolated_by_thermal);
-				}
 				continue;
 			}
-			mutex_unlock(&core_isolate_lock);
 		}
 
 		atomic_set(&in_suspend, 0);
@@ -237,12 +223,6 @@ static int cpufreq_hp_offline(unsigned int offline_cpu)
 				offline_cpu != cpufreq_cdev->cpu_id)
 			continue;
 
-		mutex_lock(&core_isolate_lock);
-		if ((cpufreq_cdev->cpufreq_state == cpufreq_cdev->max_level) &&
-			(cpumask_test_and_clear_cpu(offline_cpu,
-			&cpus_isolated_by_thermal)))
-			sched_unisolate_cpu_unlocked(offline_cpu);
-		mutex_unlock(&core_isolate_lock);
 		break;
 	}
 	mutex_unlock(&cooling_list_lock);
