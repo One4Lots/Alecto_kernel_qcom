@@ -790,11 +790,6 @@ struct rt_rq {
 #define rt_entity_is_task(rt_se) (1)
 #endif
 
-static inline bool rt_rq_is_runnable(struct rt_rq *rt_rq)
-{
-	return rt_rq->rt_queued && rt_rq->rt_nr_running;
-}
-
 /* Deadline class' related fields in a runqueue */
 struct dl_rq {
 	/* runqueue is an rbtree, ordered by deadline */
@@ -2343,22 +2338,19 @@ static inline unsigned long task_util(struct task_struct *p)
  *
  * Return: the (estimated) utilization for the specified CPU
  */
-
-#ifdef CONFIG_SCHED_WALT
 static inline unsigned long cpu_util(int cpu)
-#else
-static inline unsigned long cpu_util(int cpu);
-static inline unsigned long __cpu_util(int cpu)
-#endif
 {
 	struct cfs_rq *cfs_rq;
 	unsigned int util;
 
 #ifdef CONFIG_SCHED_WALT
-	u64 walt_cpu_util =
-		cpu_rq(cpu)->walt_stats.cumulative_runnable_avg_scaled;
+	if (likely(!walt_disabled && sysctl_sched_use_walt_cpu_util)) {
+		u64 walt_cpu_util =
+			cpu_rq(cpu)->walt_stats.cumulative_runnable_avg_scaled;
 
-	return min_t(unsigned long, walt_cpu_util, capacity_orig_of(cpu));
+		return min_t(unsigned long, walt_cpu_util,
+				capacity_orig_of(cpu));
+	}
 #endif
 
 	cfs_rq = &cpu_rq(cpu)->cfs;
@@ -2369,6 +2361,13 @@ static inline unsigned long __cpu_util(int cpu)
 
 	return min_t(unsigned long, util, capacity_orig_of(cpu));
 }
+
+struct sched_walt_cpu_load {
+	unsigned long prev_window_util;
+	unsigned long nl;
+	unsigned long pl;
+	u64 ws;
+};
 
 static inline unsigned long cpu_util_cum(int cpu, int delta)
 {
@@ -2439,10 +2438,50 @@ cpu_util_freq(int cpu, struct sched_walt_cpu_load *walt_load)
 
 #else
 
+static inline unsigned long cpu_util_dl(struct rq *rq)
+{
+#ifdef CONFIG_SMP
+    return READ_ONCE(rq->avg_dl.util_avg);
+#else
+    return 0;
+#endif
+}
+
+static inline unsigned long cpu_util_rt(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_rt.util_avg);
+}
+
 #define sched_ravg_window TICK_NSEC
 #define sysctl_sched_use_walt_cpu_util 0
 
 #endif /* CONFIG_SCHED_WALT */
+
+#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return READ_ONCE(rq->avg_irq.util_avg);
+}
+
+static inline unsigned long
+scale_irq_capacity(unsigned long util, unsigned long irq, unsigned long max)
+{
+	util *= (max - irq);
+	util /= max;
+	return util;
+}
+#else
+static inline unsigned long cpu_util_irq(struct rq *rq)
+{
+	return 0;
+}
+
+static inline unsigned long
+scale_irq_capacity(unsigned long util, unsigned long irq, unsigned long max)
+{
+	return util;
+}
+#endif
 
 extern unsigned long
 boosted_cpu_util(int cpu, struct sched_walt_cpu_load *walt_load);
@@ -2955,98 +2994,6 @@ walt_task_in_cum_window_demand(struct rq *rq, struct task_struct *p)
 #endif
 #else /* arch_scale_freq_capacity */
 #define arch_scale_freq_invariant()	(false)
-#endif
-
-extern struct cpumask min_cap_cpu_mask;
-#ifdef CONFIG_SMP
-static inline unsigned long cpu_util_cfs(struct rq *rq)
-{
-	unsigned long util = READ_ONCE(rq->cfs.avg.util_avg);
-
-	if (sched_feat(UTIL_EST)) {
-		util = max_t(unsigned long, util,
-			     READ_ONCE(rq->cfs.avg.util_est));
-	}
-
-	return util;
-}
-#endif
-
-#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL
-
-unsigned long effective_cpu_util(int cpu, unsigned long util_cfs,
-				 unsigned long *min,
-				 unsigned long *max);
-
-unsigned long sugov_effective_cpu_perf(int cpu, unsigned long actual,
-				 unsigned long min,
-				 unsigned long max);
-
-static inline unsigned long cpu_bw_dl(struct rq *rq)
-{
-	return (rq->dl.running_bw * SCHED_CAPACITY_SCALE) >> BW_SHIFT;
-}
-
-static inline unsigned long cpu_util_dl(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_dl.util_avg);
-}
-
-static inline unsigned long cpu_util_rt(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_rt.util_avg);
-}
-
-#else /* CONFIG_CPU_FREQ_GOV_SCHEDUTIL */
-unsigned long effective_cpu_util(int cpu, unsigned long util_cfs,
-                                 unsigned long *min,
-                                 unsigned long *max)
-{
-	return 0;
-}
-
-static inline unsigned long cpu_util_rt(struct rq *rq)
-{
-	return 0;
-}
-#endif /* CONFIG_CPU_FREQ_GOV_SCHEDUTIL */
-
-#ifdef CONFIG_SMP
-#ifndef CONFIG_SCHED_WALT
-static inline unsigned long cpu_util(int cpu)
-{
-	return min(__cpu_util(cpu) + cpu_util_rt(cpu_rq(cpu)),
-		   capacity_orig_of(cpu));
-}
-#endif
-#endif
-
-#ifdef CONFIG_HAVE_SCHED_AVG_IRQ
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-	return READ_ONCE(rq->avg_irq.util_avg);
-}
-
-static inline
-unsigned long scale_irq_capacity(unsigned long util, unsigned long irq, unsigned long max)
-{
-	util *= (max - irq);
-	util /= max;
-
-	return util;
-
-}
-#else
-static inline unsigned long cpu_util_irq(struct rq *rq)
-{
-	return 0;
-}
-
-static inline
-unsigned long scale_irq_capacity(unsigned long util, unsigned long irq, unsigned long max)
-{
-	return util;
-}
 #endif
 
 enum sched_boost_policy {
