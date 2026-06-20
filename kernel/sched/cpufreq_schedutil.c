@@ -194,56 +194,30 @@ static inline unsigned long apply_dvfs_headroom(unsigned long util, int cpu)
 	return sg_cpu->dvfs_headroom_lut[util];
 }
 
-static inline unsigned long cpu_bw_dl(struct rq *rq)
+unsigned long sugov_effective_cpu_perf(int cpu, unsigned long actual,
+				 unsigned long min,
+				 unsigned long max)
 {
-	return (rq->dl.running_bw * SCHED_CAPACITY_SCALE) >> BW_SHIFT;
-}
+	/* Add dvfs headroom to actual utilization */
+	actual = apply_dvfs_headroom(actual, cpu);
+	/* Actually we don't need to target the max performance */
+	if (actual < max)
+		max = actual;
 
-static unsigned long sugov_effective_cpu_perf(int cpu, unsigned long util,
-					      unsigned long min,
-					      unsigned long max)
-{
-	util = apply_dvfs_headroom(util, cpu);
-	if (util < max)
-		max = util;
+	/*
+	 * Ensure at least minimum performance while providing more compute
+	 * capacity when possible.
+	 */
 	return max(min, max);
 }
 
 static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 {
-	struct rq *rq = cpu_rq(sg_cpu->cpu);
-	unsigned long max = arch_scale_cpu_capacity(sg_cpu->cpu);
-	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
-	unsigned long uclamp_min, min, util, irq;
+	unsigned long min, max, util = cpu_util_cfs(cpu_rq(sg_cpu->cpu));
 
-	/*
-	 * Clamp the capacity by the current thermal pressure.
-	 * This prevents the governor from requesting frequency states
-	 * that the CPU cannot sustain due to thermal throttling.
-	 */
-	max -= min(max, thermal_load_avg(rq));
-
-	irq = cpu_util_irq(rq);
-	if (unlikely(irq >= max)) {
-		sg_cpu->bw_min = max;
-		sg_cpu->util = max;
-		return;
-	}
-
-	util = util_cfs + cpu_util_rt(rq) + READ_ONCE(rq->avg_dl.util_avg);
-	uclamp_min = uclamp_rq_get(rq, UCLAMP_MIN);
-	uclamp_min = uclamp_min * max >> SCHED_CAPACITY_SHIFT;
-	min = max(cpu_bw_dl(rq), uclamp_min);
-	sg_cpu->bw_min = min;
-
-	util = min(util, max);
-	util = scale_irq_capacity(util, irq, max);
-	util += irq;
-
-	util = min(util, max);
-	util = max(util, min);
+	util = effective_cpu_util(sg_cpu->cpu, util, &min, &max);
 	util = max(util, boost);
-
+	sg_cpu->bw_min = min;
 	sg_cpu->util = sugov_effective_cpu_perf(sg_cpu->cpu, util, min, max);
 }
 
