@@ -299,17 +299,10 @@ const struct sched_group_energy * const cpu_cluster_energy(int cpu)
 	return sge_array[cpu][SD_LEVEL1];
 }
 
-static inline
-const struct sched_group_energy * const cpu_system_energy(int cpu)
-{
-	return sge_array[cpu][SD_LEVEL2];
-}
-
 static struct sched_domain_topology_level arm64_topology[] = {
 #ifdef CONFIG_SCHED_SMT
 	{ cpu_smt_mask, smt_flags, SD_INIT_NAME(SMT) },
 #endif
-	{ cpu_cpu_mask, NULL, cpu_system_energy, SD_INIT_NAME(SYS) },
 	{ NULL, }
 };
 

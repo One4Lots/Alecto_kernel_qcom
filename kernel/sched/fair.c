@@ -3270,8 +3270,6 @@ static void
 account_entity_enqueue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 	update_load_add(&cfs_rq->load, se->load.weight);
-	if (!parent_entity(se))
-		update_load_add(&rq_of(cfs_rq)->load, se->load.weight);
 #ifdef CONFIG_SMP
 	if (entity_is_task(se)) {
 		struct rq *rq = rq_of(cfs_rq);
@@ -3287,8 +3285,6 @@ static void
 account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 	update_load_sub(&cfs_rq->load, se->load.weight);
-	if (!parent_entity(se))
-		update_load_sub(&rq_of(cfs_rq)->load, se->load.weight);
 #ifdef CONFIG_SMP
 	if (entity_is_task(se)) {
 		account_numa_dequeue(rq_of(cfs_rq), task_of(se));
@@ -4673,34 +4669,6 @@ util_est_dequeue(struct cfs_rq *cfs_rq, struct task_struct *p,
 		 bool task_sleep) {}
 
 #endif /* CONFIG_SMP */
-
-static inline bool se_is_idle(struct sched_entity *se)
-{
-	if (entity_is_task(se))
-		return task_of(se)->policy == SCHED_IDLE;
-	return false;
-}
-
-static inline bool entity_is_long_sleeper(struct sched_entity *se)
-{
-	struct cfs_rq *cfs_rq;
-	u64 sleep_time;
-
-	if (se->exec_start == 0)
-		return false;
-
-	cfs_rq = cfs_rq_of(se);
-	sleep_time = rq_clock_task(rq_of(cfs_rq));
-
-	if (sleep_time <= se->exec_start)
-		return false;
-
-	sleep_time -= se->exec_start;
-	if (sleep_time > ((1ULL << 63) / scale_load_down(NICE_0_LOAD)))
-		return true;
-
-	return false;
-}
 
 static void
 place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
