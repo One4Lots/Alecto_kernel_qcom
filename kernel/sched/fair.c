@@ -4368,16 +4368,10 @@ static inline bool load_avg_is_decayed(struct sched_avg *sa)
 	return true;
 }
 
-#ifdef CONFIG_SMP
-/*
- * Estimate the PELT contribution of a migrating task's load_avg by
- * accounting for idle time on the source CPU since the last update.
- * Only done when the source CPU is idle to bound the cost and because
- * that's when clock staleness causes the greatest inflation risk.
- */
-static void migrate_se_pelt_lag(struct sched_entity *se)
+#ifdef CONFIG_NO_HZ_COMMON
+static inline void migrate_se_pelt_lag(struct sched_entity *se)
 {
-	u64 now, lut;
+	u64 throttled = 0, now, lut;
 	struct cfs_rq *cfs_rq;
 	struct rq *rq;
 	bool is_idle;
@@ -4393,22 +4387,60 @@ static void migrate_se_pelt_lag(struct sched_entity *se)
 	rcu_read_unlock();
 
 	/*
-	 * Only compensate when source CPU is idle; that's when we are most
-	 * likely to have a stale clock causing load inflation post-migration.
+	 * The lag estimation comes with a cost we don't want to pay all the
+	 * time. Hence, limiting to the case where the source CPU is idle and
+	 * we know we are at the greatest risk to have an outdated clock.
 	 */
 	if (!is_idle)
 		return;
 
+	/*
+	 * Estimated "now" is: last_update_time + cfs_idle_lag + rq_idle_lag, where:
+	 *
+	 *   last_update_time (the cfs_rq's last_update_time)
+	 *	= cfs_rq_clock_pelt()@cfs_rq_idle
+	 *      = rq_clock_pelt()@cfs_rq_idle
+	 *        - cfs->throttled_clock_pelt_time@cfs_rq_idle
+	 *
+	 *   cfs_idle_lag (delta between rq's update and cfs_rq's update)
+	 *      = rq_clock_pelt()@rq_idle - rq_clock_pelt()@cfs_rq_idle
+	 *
+	 *   rq_idle_lag (delta between now and rq's update)
+	 *      = sched_clock_cpu() - rq_clock()@rq_idle
+	 *
+	 * We can then write:
+	 *
+	 *    now = rq_clock_pelt()@rq_idle - cfs->throttled_clock_pelt_time +
+	 *          sched_clock_cpu() - rq_clock()@rq_idle
+	 * Where:
+	 *      rq_clock_pelt()@rq_idle is rq->clock_pelt_idle
+	 *      rq_clock()@rq_idle      is rq->clock_idle
+	 *      cfs->throttled_clock_pelt_time@cfs_rq_idle
+	 *                              is cfs_rq->throttled_pelt_idle
+	 */
+
+#ifdef CONFIG_CFS_BANDWIDTH
+	throttled = u64_u32_load(cfs_rq->throttled_pelt_idle);
+	/* The clock has been stopped for throttling */
+	if (throttled == U64_MAX)
+		return;
+#endif
 	now = u64_u32_load(rq->clock_pelt_idle);
 	/*
-	 * Paired with _update_idle_rq_clock_pelt(). Ensures we observe
-	 * the old clock_pelt_idle before the new clock_idle, which at
-	 * worst causes underestimation (safe) rather than overestimation.
+	 * Paired with _update_idle_rq_clock_pelt(). It ensures at the worst case
+	 * is observed the old clock_pelt_idle value and the new clock_idle,
+	 * which lead to an underestimation. The opposite would lead to an
+	 * overestimation.
 	 */
 	smp_rmb();
 	lut = cfs_rq_last_update_time(cfs_rq);
 
+	now -= throttled;
 	if (now < lut)
+		/*
+		 * cfs_rq->avg.last_update_time is more recent than our
+		 * estimation, let's use it.
+		 */
 		now = lut;
 	else
 		now += sched_clock_cpu(cpu_of(rq)) - u64_u32_load(rq->clock_idle);
@@ -9165,11 +9197,6 @@ pick_cpu:
 
 	rcu_read_unlock();
 
-#ifdef CONFIG_NO_HZ_COMMON
-	if (nohz_kick_needed(cpu_rq(new_cpu), true))
-		nohz_balancer_kick(true);
-#endif
-
 	return new_cpu;
 }
 #endif /* CONFIG_SCHED_CASS */
@@ -10395,9 +10422,6 @@ static void __update_blocked_averages(struct rq *rq)
 	update_rt_rq_load_avg(rq_clock_pelt(rq), rq, 0);
 	update_dl_rq_load_avg(rq_clock_pelt(rq), rq, 0);
 	update_irq_load_avg(rq, 0);
-#ifdef CONFIG_NO_HZ_COMMON
-	rq->last_blocked_load_update_tick = jiffies;
-#endif
 }
 
 static void update_blocked_averages(int cpu)
