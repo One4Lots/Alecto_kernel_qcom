@@ -13266,34 +13266,6 @@ prio_changed_fair(struct rq *rq, struct task_struct *p, int oldprio)
 		check_preempt_curr(rq, p, 0);
 }
 
-static inline bool vruntime_normalized(struct task_struct *p)
-{
-	struct sched_entity *se = &p->se;
-
-	/*
-	 * In both the TASK_ON_RQ_QUEUED and TASK_ON_RQ_MIGRATING cases,
-	 * the dequeue_entity(.flags=0) will already have normalized the
-	 * vruntime.
-	 */
-	if (p->on_rq)
-		return true;
-
-	/*
-	 * When !on_rq, vruntime of the task has usually NOT been normalized.
-	 * But there are some cases where it has already been normalized:
-	 *
-	 * - A forked child which is waiting for being woken up by
-	 *   wake_up_new_task().
-	 * - A task which has been woken up by try_to_wake_up() and
-	 *   waiting for actually being woken up by sched_ttwu_pending().
-	 */
-	if (!se->sum_exec_runtime ||
-	    (p->state == TASK_WAKING && p->sched_remote_wakeup))
-		return true;
-
-	return false;
-}
-
 #ifdef CONFIG_FAIR_GROUP_SCHED
 /*
  * Propagate the changes of the sched_entity across the tg tree to make it
@@ -13352,16 +13324,6 @@ static void attach_entity_cfs_rq(struct sched_entity *se)
 static void detach_task_cfs_rq(struct task_struct *p)
 {
 	struct sched_entity *se = &p->se;
-	struct cfs_rq *cfs_rq = cfs_rq_of(se);
-
-	if (!vruntime_normalized(p)) {
-		/*
-		 * Fix up our vruntime so that the current sleep doesn't
-		 * cause 'unlimited' sleep bonus.
-		 */
-		place_entity(cfs_rq, se, 0);
-		se->deadline = 0;
-	}
 
 	detach_entity_cfs_rq(se);
 }
@@ -13452,21 +13414,9 @@ static void set_curr_task_fair(struct rq *rq)
 void init_cfs_rq(struct cfs_rq *cfs_rq)
 {
 	cfs_rq->tasks_timeline = RB_ROOT_CACHED;
-	cfs_rq->min_vruntime = (u64)(-(1LL << 20));
 	cfs_rq->zero_vruntime = (u64)(-(1LL << 20));
-#ifndef CONFIG_64BIT
-	cfs_rq->min_vruntime_copy = cfs_rq->min_vruntime;
-#endif
 #ifdef CONFIG_SMP
-	raw_spin_lock_init(&cfs_rq->avg_lock);
 	raw_spin_lock_init(&cfs_rq->removed.lock);
-#ifdef CONFIG_FAIR_GROUP_SCHED
-	cfs_rq->propagate = 0;
-#endif
-	cfs_rq->removed.nr = 0;
-	cfs_rq->removed.load_avg = 0;
-	cfs_rq->removed.util_avg = 0;
-	cfs_rq->removed.runnable_avg = 0;
 #endif
 }
 
