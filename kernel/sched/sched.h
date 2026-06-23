@@ -2389,14 +2389,6 @@ unsigned long arch_scale_max_freq_capacity(int cpu)
 }
 #endif
 
-#ifndef arch_scale_cpu_capacity
-static __always_inline
-unsigned long arch_scale_cpu_capacity(int cpu)
-{
-	return SCHED_CAPACITY_SCALE;
-}
-#endif
-
 #ifdef CONFIG_SMP
 static inline unsigned long capacity_of(int cpu)
 {

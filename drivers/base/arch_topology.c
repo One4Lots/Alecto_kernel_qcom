@@ -107,7 +107,6 @@ static ssize_t cpu_capacity_store(struct device *dev,
 	int i;
 	unsigned long new_capacity;
 	ssize_t ret;
-	cpumask_var_t mask;
 
 	if (!count)
 		return 0;
@@ -119,40 +118,11 @@ static ssize_t cpu_capacity_store(struct device *dev,
 		return -EINVAL;
 
 	mutex_lock(&cpu_scale_mutex);
-
-	if (new_capacity < SCHED_CAPACITY_SCALE) {
-		int highest_score_cpu = 0;
-
-		if (!alloc_cpumask_var(&mask, GFP_KERNEL)) {
-			mutex_unlock(&cpu_scale_mutex);
-			return -ENOMEM;
-		}
-
-		cpumask_andnot(mask, cpu_online_mask,
-				topology_core_cpumask(this_cpu));
-
-		for_each_cpu(i, mask) {
-			if (topology_get_cpu_scale(i) ==
-					SCHED_CAPACITY_SCALE) {
-				highest_score_cpu = 1;
-				break;
-			}
-		}
-
-		free_cpumask_var(mask);
-
-		if (!highest_score_cpu) {
-			mutex_unlock(&cpu_scale_mutex);
-			return -EINVAL;
-		}
-	}
-
-	for_each_cpu(i, topology_core_cpumask(this_cpu))
+	for_each_cpu(i, &cpu_topology[this_cpu].core_sibling)
 		topology_set_cpu_scale(i, new_capacity);
 	mutex_unlock(&cpu_scale_mutex);
 
-	if (topology_detect_flags())
-		schedule_work(&update_topology_flags_work);
+	schedule_work(&update_topology_flags_work);
 
 	return count;
 }
@@ -340,12 +310,13 @@ void topology_normalize_cpu_scale(void)
 	pr_debug("cpu_capacity: capacity_scale=%u\n", capacity_scale);
 	mutex_lock(&cpu_scale_mutex);
 	for_each_possible_cpu(cpu) {
+		pr_debug("cpu_capacity: cpu=%d raw_capacity=%u\n",
+			 cpu, raw_capacity[cpu]);
 		capacity = (raw_capacity[cpu] << SCHED_CAPACITY_SHIFT)
 			/ capacity_scale;
 		topology_set_cpu_scale(cpu, capacity);
-		pr_debug("cpu_capacity: CPU%d cpu_capacity=%lu raw_capacity=%u\n",
-			cpu, topology_get_cpu_scale(cpu),
-			raw_capacity[cpu]);
+		pr_debug("cpu_capacity: CPU%d cpu_capacity=%lu\n",
+			cpu, topology_get_cpu_scale(cpu));
 	}
 	mutex_unlock(&cpu_scale_mutex);
 }

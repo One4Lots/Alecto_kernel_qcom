@@ -10566,15 +10566,37 @@ static void update_cpu_capacity(struct sched_domain *sd, int cpu)
 {
 	unsigned long capacity = arch_scale_cpu_capacity(cpu);
 	struct sched_group *sdg = sd->groups;
+	struct max_cpu_capacity *mcc;
+	unsigned long max_capacity;
+	int max_cap_cpu;
+	unsigned long flags;
+
+	cpu_rq(cpu)->cpu_capacity_orig = capacity;
 
 	capacity *= arch_scale_max_freq_capacity(sd, cpu);
 	capacity >>= SCHED_CAPACITY_SHIFT;
 
-	capacity = min(capacity, thermal_cap(cpu));
-	cpu_rq(cpu)->cpu_capacity_orig = capacity;
+	mcc = &cpu_rq(cpu)->rd->max_cpu_capacity;
 
-	capacity *= scale_rt_capacity(cpu, capacity);
-	capacity >>= SCHED_CAPACITY_SHIFT;
+	raw_spin_lock_irqsave(&mcc->lock, flags);
+	max_capacity = mcc->val;
+	max_cap_cpu = mcc->cpu;
+
+	if ((max_capacity > capacity && max_cap_cpu == cpu) ||
+	    (max_capacity < capacity)) {
+		mcc->val = capacity;
+		mcc->cpu = cpu;
+#ifdef CONFIG_SCHED_DEBUG
+		raw_spin_unlock_irqrestore(&mcc->lock, flags);
+		printk_deferred(KERN_INFO "CPU%d: update max cpu_capacity %lu\n",
+				cpu, capacity);
+		goto skip_unlock;
+#endif
+	}
+	raw_spin_unlock_irqrestore(&mcc->lock, flags);
+
+skip_unlock: __attribute__ ((unused));
+	capacity = scale_rt_capacity(cpu, capacity);
 
 	if (!capacity)
 		capacity = 1;
@@ -10607,31 +10629,11 @@ void update_group_capacity(struct sched_domain *sd, int cpu)
 		 */
 
 		for_each_cpu(cpu, sched_group_span(sdg)) {
-			struct sched_group_capacity *sgc;
-			struct rq *rq = cpu_rq(cpu);
+			unsigned long cpu_cap = capacity_of(cpu);
 
-			if (cpumask_test_cpu(cpu, cpu_isolated_mask))
-				continue;
-			/*
-			 * build_sched_domains() -> init_sched_groups_capacity()
-			 * gets here before we've attached the domains to the
-			 * runqueues.
-			 *
-			 * Use capacity_of(), which is set irrespective of domains
-			 * in update_cpu_capacity().
-			 *
-			 * This avoids capacity from being 0 and
-			 * causing divide-by-zero issues on boot.
-			 */
-			if (unlikely(!rq->sd)) {
-				capacity += capacity_of(cpu);
-			} else {
-				sgc = rq->sd->groups->sgc;
-				capacity += sgc->capacity;
-			}
-
-			min_capacity = min(capacity, min_capacity);
-			max_capacity = max(capacity, max_capacity);
+			capacity += cpu_cap;
+			min_capacity = min(cpu_cap, min_capacity);
+			max_capacity = max(cpu_cap, max_capacity);
 		}
 	} else  {
 		/*
@@ -10642,15 +10644,10 @@ void update_group_capacity(struct sched_domain *sd, int cpu)
 		group = child->groups;
 		do {
 			struct sched_group_capacity *sgc = group->sgc;
-			cpumask_t *cpus = sched_group_span(group);
 
-			if (!cpu_isolated(cpumask_first(cpus))) {
-				capacity += sgc->capacity;
-				min_capacity = min(sgc->min_capacity,
-							min_capacity);
-				max_capacity = max(sgc->max_capacity,
-							max_capacity);
-			}
+			capacity += sgc->capacity;
+			min_capacity = min(sgc->min_capacity, min_capacity);
+			max_capacity = max(sgc->max_capacity, max_capacity);
 			group = group->next;
 		} while (group != child->groups);
 	}

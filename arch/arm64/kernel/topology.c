@@ -326,19 +326,20 @@ static void __init reset_cpu_topology(void)
 
 void __init init_cpu_topology(void)
 {
-	int cpu;
-
 	reset_cpu_topology();
 
 	/*
 	 * Discard anything that was parsed if we hit an error so we
 	 * don't use partial information.
 	 */
-	if (of_have_populated_dt() && parse_dt_topology()) {
+	if (of_have_populated_dt() && parse_dt_topology())
 		reset_cpu_topology();
-	} else {
-		set_sched_topology(arm64_topology);
+#ifdef CONFIG_SCHED_WALT
+	else {
+		int cpu;
+
 		for_each_possible_cpu(cpu)
-			update_siblings_masks(cpu);
+			update_possible_siblings_masks(cpu);
 	}
+#endif
 }
