@@ -210,7 +210,7 @@ sd_parent_degenerate(struct sched_domain *sd, struct sched_domain *parent)
 }
 
 DEFINE_STATIC_KEY_FALSE(sched_energy_present);
-#if defined(CONFIG_ENERGY_MODEL) && defined(CONFIG_CPU_FREQ_GOV_SCHEDUTIL)
+#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL
 unsigned int sysctl_sched_energy_aware = 1;
 DEFINE_MUTEX(sched_energy_mutex);
 bool sched_energy_update;
@@ -429,7 +429,7 @@ free:
 }
 #else
 static void free_pd(struct perf_domain *pd) { }
-#endif /* CONFIG_ENERGY_MODEL && CONFIG_CPU_FREQ_GOV_SCHEDUTIL*/
+#endif /*CONFIG_CPU_FREQ_GOV_SCHEDUTIL*/
 
 static void free_rootdomain(struct rcu_head *rcu)
 {

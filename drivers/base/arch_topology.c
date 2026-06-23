@@ -362,7 +362,6 @@ bool __init topology_parse_cpu_capacity(struct device_node *cpu_node, int cpu)
 	ret = of_property_read_u32(cpu_node, "capacity-dmips-mhz",
 				   &cpu_capacity);
 	if (!ret) {
-		per_cpu(efficiency, cpu) = cpu_capacity;
 		if (!raw_capacity) {
 			raw_capacity = kcalloc(num_possible_cpus(),
 					       sizeof(*raw_capacity),

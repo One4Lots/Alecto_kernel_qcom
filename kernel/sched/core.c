@@ -4026,8 +4026,6 @@ void scheduler_tick(void)
 	sched_clock_tick();
 
 	rq_lock(rq, &rf);
-
-	topology_scale_freq_tick();
 #ifdef CONFIG_SCHED_WALT
 	old_load = task_load(curr);
 	set_window_start(rq);
