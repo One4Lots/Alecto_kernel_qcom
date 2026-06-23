@@ -179,6 +179,8 @@ static int sd_degenerate(struct sched_domain *sd)
 	return 1;
 }
 
+unsigned int sysctl_sched_energy_aware = 1;
+
 static int
 sd_parent_degenerate(struct sched_domain *sd, struct sched_domain *parent)
 {
@@ -208,23 +210,6 @@ sd_parent_degenerate(struct sched_domain *sd, struct sched_domain *parent)
 
 	return 1;
 }
-
-DEFINE_STATIC_KEY_FALSE(sched_energy_present);
-#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL
-unsigned int sysctl_sched_energy_aware = 1;
-DEFINE_MUTEX(sched_energy_mutex);
-bool sched_energy_update;
-
-#ifdef CONFIG_PROC_SYSCTL
-int sched_energy_aware_handler(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp, loff_t *ppos)
-{
-	// TEMPORARY. NEED IMPLEMENT ENERGY MODEL 
-}
-#endif
-#else
-static void free_pd(struct perf_domain *pd) { }
-#endif /*CONFIG_CPU_FREQ_GOV_SCHEDUTIL*/
 
 static void free_rootdomain(struct rcu_head *rcu)
 {
