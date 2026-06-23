@@ -33,7 +33,7 @@ static int __init irq_affinity_setup(char *str)
 	 * Set at least the boot cpu. We don't want to end up with
 	 * bugreports caused by random comandline masks
 	 */
-	cpumask_setall(irq_default_affinity);
+	cpumask_set_cpu(smp_processor_id(), irq_default_affinity);
 	return 1;
 }
 __setup("irqaffinity=", irq_affinity_setup);
