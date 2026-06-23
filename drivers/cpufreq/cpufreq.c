@@ -2338,11 +2338,6 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 
 	policy->min = new_policy->min;
 	policy->max = new_policy->max;
-
-	arch_set_max_freq_scale(policy->cpus, policy->max);
-	arch_set_min_freq_scale(policy->related_cpus, policy->min,
-				policy->cpuinfo.max_freq);
-
 	trace_cpu_frequency_limits(policy->max, policy->min, policy->cpu);
 
 	arch_set_max_freq_scale(policy->cpus, policy->max);
