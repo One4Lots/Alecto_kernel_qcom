@@ -99,22 +99,6 @@ enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_N
 unsigned int sysctl_sched_base_slice			= 2800000ULL;
 static unsigned int normalized_sysctl_sched_base_slice	= 2800000ULL;
 
-/*
- * This value is kept at sysctl_sched_base_slice * (1 + ilog(ncpus))
- * (default: 6ms * (1 + ilog(ncpus)), units: nanoseconds)
- */
-
-/*
- * Enable/disable energy-aware scheduling.
- */
-unsigned int __read_mostly sysctl_sched_energy_aware = 1;
-
-/*
- * After fork, child runs first. If set to 0 (default) then
- * parent will (try to) run first.
- */
-unsigned int sysctl_sched_child_runs_first __read_mostly;
-
 const_debug unsigned int sysctl_sched_migration_cost	= 0UL;
 DEFINE_PER_CPU_READ_MOSTLY(int, sched_load_boost);
 
