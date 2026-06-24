@@ -1499,8 +1499,7 @@ task_may_not_preempt(struct task_struct *task, int cpu)
 }
 
 static int
-select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
-		  int sibling_count_hint)
+select_task_rq_rt(struct task_struct *p, int cpu, int flags)
 {
 	struct task_struct *curr, *tgt_task;
 	struct rq *rq;
@@ -1511,7 +1510,7 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
 	int this_cpu;
 
 	/* For anything but wake ups, just return the task_cpu */
-	if (sd_flag != SD_BALANCE_WAKE && sd_flag != SD_BALANCE_FORK)
+	if (!(flags & (WF_TTWU | WF_FORK)))
 		goto out;
 
 	rq = cpu_rq(cpu);
@@ -1523,6 +1522,11 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
 
 	/*
 	 * If the current task on @p's runqueue is a softirq task,
+	 * it may run without preemption for a time that is
+	 * ill-suited for a waiting RT task. Therefore, try to
+	 * wake this RT task on another runqueue.
+	 *
+	 * Also, if the current task on @p's runqueue is an RT task, then
 	 * it may run without preemption for a time that is
 	 * ill-suited for a waiting RT task. Therefore, try to
 	 * wake this RT task on another runqueue.
@@ -1553,7 +1557,7 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
 	 * systems like big.LITTLE.
 	 */
 	may_not_preempt = task_may_not_preempt(curr, cpu);
-	test = energy_aware() ||
+	test = sched_energy_enabled() ||
 	       (curr && unlikely(rt_task(curr)) &&
 	       (curr->nr_cpus_allowed < 2 || curr->prio <= p->prio));
 

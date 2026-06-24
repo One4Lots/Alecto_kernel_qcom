@@ -1034,18 +1034,12 @@ struct uclamp_rq {
 DECLARE_STATIC_KEY_FALSE(sched_uclamp_used);
 #endif /* CONFIG_UCLAMP_TASK */
 
-#ifdef CONFIG_ENERGY_MODEL
-#define perf_domain_span(pd) (to_cpumask(((pd)->em_pd->cpus)))
-DECLARE_STATIC_KEY_FALSE(sched_energy_present);
-
+#ifndef CONFIG_ENERGY_MODEL
+extern unsigned int sysctl_sched_energy_aware;
 static inline bool sched_energy_enabled(void)
 {
-	return static_branch_unlikely(&sched_energy_present);
+	return sysctl_sched_energy_aware;
 }
-
-#else
-#define perf_domain_span(pd) NULL
-static inline bool sched_energy_enabled(void) { return false; }
 #endif
 
 /*
@@ -2103,8 +2097,7 @@ struct sched_class {
 	void (*put_prev_task) (struct rq *rq, struct task_struct *p);
 
 #ifdef CONFIG_SMP
-	int  (*select_task_rq)(struct task_struct *p, int task_cpu, int sd_flag, int flags,
-			       int subling_count_hint);
+	int  (*select_task_rq)(struct task_struct *p, int task_cpu, int flags);
 	void (*migrate_task_rq)(struct task_struct *p, int new_cpu);
 
 	void (*task_woken) (struct rq *this_rq, struct task_struct *task);

@@ -9075,105 +9075,58 @@ static inline int wake_energy(struct task_struct *p, int prev_cpu,
  */
 #ifndef CONFIG_SCHED_CASS
 static int
-select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_flags,
-		    int sibling_count_hint)
+select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
 {
-	struct sched_domain *tmp, *affine_sd = NULL;
-	struct sched_domain *sd = NULL, *energy_sd = NULL;
+	int sync = (wake_flags & WF_SYNC) && !(current->flags & PF_EXITING);
+	struct sched_domain *tmp, *sd = NULL;
 	int cpu = smp_processor_id();
 	int new_cpu = prev_cpu;
 	int want_affine = 0;
-	int want_energy = 0;
-	int sync = wake_flags & WF_SYNC;
+	/* SD_flags and WF_flags share the first nibble */
+	int sd_flag = wake_flags & 0xF;
 
-	if (energy_aware()) {
-		rcu_read_lock();
-		new_cpu = find_energy_efficient_cpu(energy_sd, p,
-						cpu, prev_cpu, sync,
-						sibling_count_hint);
-		rcu_read_unlock();
-		return new_cpu;
-	}
-
-	rcu_read_lock();
-
-	if (sd_flag & SD_BALANCE_WAKE) {
+	if (wake_flags & WF_TTWU) {
 		record_wakee(p);
-		want_energy = wake_energy(p, prev_cpu, sd_flag, wake_flags);
-		want_affine = !want_energy &&
-			      !wake_wide(p, sibling_count_hint) &&
-			      !wake_cap(p, cpu, prev_cpu) &&
+
+                if (sched_energy_enabled()) {
+			new_cpu = find_energy_efficient_cpu(p, prev_cpu, sync, 1);
+			if (new_cpu >= 0)
+				return new_cpu;
+			new_cpu = prev_cpu;
+		}
+
+		want_affine = !wake_wide(p) &&
 			      cpumask_test_cpu(cpu, &p->cpus_allowed);
 	}
 
+	rcu_read_lock();
 	for_each_domain(cpu, tmp) {
-		if (!(tmp->flags & SD_LOAD_BALANCE))
-			break;
-
 		/*
-		 * If both cpu and prev_cpu are part of this domain,
+		 * If both 'cpu' and 'prev_cpu' are part of this domain,
 		 * cpu is a valid SD_WAKE_AFFINE target.
 		 */
 		if (want_affine && (tmp->flags & SD_WAKE_AFFINE) &&
 		    cpumask_test_cpu(prev_cpu, sched_domain_span(tmp))) {
-			affine_sd = tmp;
+			if (cpu != prev_cpu)
+				new_cpu = wake_affine(tmp, p, cpu, prev_cpu, sync);
+
+			sd = NULL; /* Prefer wake_affine over balance flags */
 			break;
 		}
 
-		/*
-		 * If we are able to try an energy-aware wakeup,
-		 * select the highest non-overutilized sched domain
-		 * which includes this cpu and prev_cpu
-		 *
-		 * maybe want to not test prev_cpu and only consider
-		 * the current one?
-		 */
-		if (want_energy &&
-		    !sd_overutilized(tmp) &&
-		    cpumask_test_cpu(prev_cpu, sched_domain_span(tmp)))
-			energy_sd = tmp;
-
 		if (tmp->flags & sd_flag)
 			sd = tmp;
-		else if (!(want_affine || want_energy))
+		else if (!want_affine)
 			break;
 	}
 
-	if (affine_sd) {
-		sd = NULL; /* Prefer wake_affine over balance flags */
-		if (cpu == prev_cpu)
-			goto pick_cpu;
-
-		if (wake_affine(affine_sd, p, prev_cpu, sync))
-			new_cpu = cpu;
+	if (unlikely(sd)) {
+		/* Slow path */
+		new_cpu = find_idlest_cpu(sd, p, cpu, prev_cpu, sd_flag);
+	} else if (wake_flags & WF_TTWU) { /* XXX always ? */
+		/* Fast path */
+		new_cpu = select_idle_sibling(p, prev_cpu, new_cpu);
 	}
-
-	if (sd && !(sd_flag & SD_BALANCE_FORK)) {
-		/*
-		 * We're going to need the task's util for capacity_spare_without
-		 * in find_idlest_group. Sync it up to prev_cpu's
-		 * last_update_time.
-		 */
-		sync_entity_load_avg(&p->se);
-	}
-
-	if (!sd) {
-pick_cpu:
-		if (sd_flag & SD_BALANCE_WAKE) /* XXX always ? */
-			new_cpu = select_idle_sibling(p, prev_cpu, new_cpu);
-
-	} else {
-		if (energy_sd)
-			new_cpu = find_energy_efficient_cpu(energy_sd, p, cpu,
-					prev_cpu, sync, sibling_count_hint);
-
-		/* if we did an energy-aware placement and had no choices available
-		 * then fall back to the default find_idlest_cpu choice
-		 */
-		if (!energy_sd || (energy_sd && new_cpu == -1))
-			new_cpu = find_idlest_cpu(sd, p, cpu, prev_cpu, sd_flag);
-	}
-
 	rcu_read_unlock();
 
 	return new_cpu;
@@ -13576,16 +13529,9 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
 }
  
 #ifdef CONFIG_SCHED_CASS
-#include "cass.h"
 #include "cass.c"
-static int select_task_rq_fair_compat(struct task_struct *p, int prev_cpu,
-                                    int sd_flag, int wake_flags, int sibling_count_hint)
-{
-    return cass_select_task_rq_fair(p, prev_cpu, wake_flags);
-}
-
-#define select_task_rq_fair select_task_rq_fair_compat
-#endif
+#define select_task_rq_fair cass_select_task_rq_fair
+#endif /* CONFIG_SCHED_CASS */
 
 
 /*
