@@ -41,6 +41,7 @@ enum tick_nohz_mode {
  * @timer_expires:	Anticipated timer expiration time (in case sched tick is stopped)
  * @timer_expires_base:	Base time clock monotonic for @timer_expires
  * @do_timer_lst:	CPU was the last one doing do_timer before going idle
+ * @got_idle_tick:	Tick timer function has run with @inidle set
  */
 struct tick_sched {
 	struct hrtimer			sched_timer;
@@ -65,6 +66,7 @@ struct tick_sched {
 	u64				next_timer;
 	ktime_t				idle_expires;
 	int				do_timer_last;
+	unsigned int			got_idle_tick	: 1;
 	atomic_t			tick_dep_mask;
 };
 

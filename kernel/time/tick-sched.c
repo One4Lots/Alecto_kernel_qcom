@@ -124,7 +124,7 @@ static ktime_t tick_init_jiffy_update(void)
 }
 
 
-static void tick_sched_do_timer(ktime_t now)
+static void tick_sched_do_timer(struct tick_sched *ts, ktime_t now)
 {
 	int cpu = smp_processor_id();
 
@@ -144,6 +144,9 @@ static void tick_sched_do_timer(ktime_t now)
 	/* Check, if the jiffies need an update */
 	if (tick_do_timer_cpu == cpu)
 		tick_do_update_jiffies64(now);
+
+	if (ts->inidle)
+		ts->got_idle_tick = 1;
 }
 
 static void tick_sched_handle(struct tick_sched *ts, struct pt_regs *regs)
@@ -1069,8 +1072,8 @@ bool tick_nohz_idle_got_tick(void)
 {
 	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
 
-	if (ts->inidle > 1) {
-		ts->inidle = 1;
+	if (ts->got_idle_tick) {
+		ts->got_idle_tick = 0;
 		return true;
 	}
 	return false;
@@ -1220,7 +1223,7 @@ static void tick_nohz_handler(struct clock_event_device *dev)
 
 	dev->next_event = KTIME_MAX;
 
-	tick_sched_do_timer(now);
+	tick_sched_do_timer(ts, now);
 	tick_sched_handle(ts, regs);
 
 	/* No need to reprogram if we are running tickless  */
@@ -1329,7 +1332,7 @@ static enum hrtimer_restart tick_sched_timer(struct hrtimer *timer)
 	if (ts->inidle)
 		ts->inidle = 2;
 
-	tick_sched_do_timer(now);
+	tick_sched_do_timer(ts, now);
 
 	/*
 	 * Do not call, when we are not in irq context and have
