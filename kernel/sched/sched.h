@@ -2066,7 +2066,6 @@ extern const u32 sched_prio_to_wmult[40];
 #define ENQUEUE_WAKEUP_SYNC	0x80
 #define ENQUEUE_INITIAL		0x100
 #define ENQUEUE_DELAYED		0x200
-#define ENQUEUE_RQ_SELECTED	0x400
 
 #define RETRY_TASK		((void *)-1UL)
 
