@@ -9258,13 +9258,32 @@ static inline enum preempt_wakeup_action
 preempt_sync(struct rq *rq, int wake_flags,
 	     struct sched_entity *pse, struct sched_entity *se)
 {
-	u64 threshold = sysctl_sched_migration_cost;
-	u64 delta;
+	u64 threshold, delta;
 
+	/*
+	 * WF_SYNC without WF_TTWU is not expected so warn if it happens even
+	 * though it is likely harmless.
+	 */
+	WARN_ON_ONCE(!(wake_flags & WF_TTWU));
+
+	threshold = sysctl_sched_migration_cost;
 	delta = rq_clock_task(rq) - se->exec_start;
 	if ((s64)delta < 0)
 		delta = 0;
 
+	/*
+	 * WF_RQ_SELECTED implies the tasks are stacking on a CPU when they
+	 * could run on other CPUs. Reduce the threshold before preemption is
+	 * allowed to an arbitrary lower value as it is more likely (but not
+	 * guaranteed) the waker requires the wakee to finish.
+	 */
+	if (wake_flags & WF_RQ_SELECTED)
+		threshold >>= 2;
+
+	/*
+	 * As WF_SYNC is not strictly obeyed, allow some runtime for batch
+	 * wakeups to be issued.
+	 */
 	if (entity_before(pse, se) && delta >= threshold)
 		return PREEMPT_WAKEUP_RESCHED;
 
