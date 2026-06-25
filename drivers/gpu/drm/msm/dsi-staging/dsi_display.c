@@ -36,6 +36,7 @@
 #include "sde_dbg.h"
 #include "dsi_parser.h"
 #include "dsi_phy.h"
+#include <linux/cpu-boost.h>
 
 #define to_dsi_display(x) container_of(x, struct dsi_display, host)
 #define INT_BASE_10 10
@@ -4385,6 +4386,7 @@ static int dsi_display_dfps_update(struct dsi_display *display,
 	 * active mode.
 	 */
 	panel_mode->dsi_mode_flags = 0;
+	cpu_boost_set_refresh_rate(timing->refresh_rate);
 
 error:
 	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);

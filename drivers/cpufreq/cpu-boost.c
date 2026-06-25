@@ -184,6 +184,30 @@ static void do_input_boost_rem(struct work_struct *work)
 	}
 }
 
+void cpu_boost_set_refresh_rate(unsigned int fps)
+{
+	int cpu;
+	struct cpu_sync *s;
+
+	for_each_possible_cpu(cpu) {
+		s = &per_cpu(sync_info, cpu);
+		if (fps <= 60) {
+			s->input_boost_freq = 0;
+			input_boost_ms = 0;
+		} else if (fps < 90) {
+			s->input_boost_freq = (cpu <= 3) ? 1401600 :
+					      (cpu <= 6) ? 748800 : 0;
+			input_boost_ms = 200;
+		} else {
+			s->input_boost_freq = (cpu <= 3) ? 1708800 :
+					      (cpu <= 6) ? 940800 : 0;
+			input_boost_ms = 300;
+		}
+	}
+	input_boost_enabled = (fps > 60);
+}
+EXPORT_SYMBOL(cpu_boost_set_refresh_rate);
+
 static void do_input_boost(struct work_struct *work)
 {
 	unsigned int i, ret;
@@ -331,7 +355,7 @@ static int cpu_boost_init(void)
 			s->input_boost_freq = 0;
 	}
 	input_boost_enabled = true;
-	input_boost_ms = 400;
+	input_boost_ms = 300;
 
 	cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
 
