@@ -35,7 +35,7 @@ static struct workqueue_struct *cpu_boost_wq;
 
 static struct work_struct input_boost_work;
 
-static unsigned int input_boost_ms = 40;
+static unsigned int input_boost_ms = 450;
 
 static unsigned int sched_boost_on_input;
 
@@ -334,7 +334,7 @@ static int cpu_boost_init(void)
                 else
                         s->input_boost_freq = 0;
         }
-        input_boost_ms = 300;
+        input_boost_ms = 450;
 
         cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
 
