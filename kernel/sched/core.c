@@ -1765,11 +1765,18 @@ static struct rq *move_queued_task(struct rq *rq, struct rq_flags *rf,
 {
 	lockdep_assert_held(&rq->lock);
 
-	p->on_rq = TASK_ON_RQ_MIGRATING;
+	WRITE_ONCE(p->on_rq, TASK_ON_RQ_MIGRATING);
 	dequeue_task(rq, p, DEQUEUE_NOCLOCK);
+#ifdef CONFIG_SCHED_WALT
 	double_lock_balance(rq, cpu_rq(new_cpu));
+	if (!(rq->clock_update_flags & RQCF_UPDATED))
+		update_rq_clock(rq);
 	set_task_cpu(p, new_cpu);
 	double_rq_unlock(cpu_rq(new_cpu), rq);
+#else
+	set_task_cpu(p, new_cpu);
+	rq_unlock(rq, rf);
+#endif
 
 	rq = cpu_rq(new_cpu);
 
@@ -1937,7 +1944,7 @@ static int __set_cpus_allowed_ptr(struct task_struct *p,
 
 	if (cpumask_equal(&p->cpus_allowed, new_mask))
 		goto out;
-
+#ifdef CONFIG_SCHED_WALT
 	cpumask_andnot(&allowed_mask, new_mask, cpu_isolated_mask);
 	cpumask_and(&allowed_mask, &allowed_mask, cpu_valid_mask);
 
@@ -1950,7 +1957,13 @@ static int __set_cpus_allowed_ptr(struct task_struct *p,
 			goto out;
 		}
 	}
-
+#else
+	dest_cpu = cpumask_any_and(cpu_valid_mask, new_mask);
+	if (dest_cpu >= nr_cpu_ids) {
+		ret = -EINVAL;
+		goto out;
+	}
+#endif
 	do_set_cpus_allowed(p, new_mask);
 
 	if (p->flags & PF_KTHREAD) {
@@ -1964,9 +1977,13 @@ static int __set_cpus_allowed_ptr(struct task_struct *p,
 	}
 
 	/* Can the task run on the task's current CPU? If so, we're done */
+#ifdef CONFIG_SCHED_WALT
 	if (cpumask_test_cpu(task_cpu(p), &allowed_mask))
 		goto out;
-
+#else
+	if (cpumask_test_cpu(task_cpu(p), new_mask))
+		goto out;
+#endif
 	if (task_running(rq, p) || p->state == TASK_WAKING) {
 		struct migration_arg arg = { p, dest_cpu };
 		/* Need help from migration thread: drop lock and wait. */
@@ -3088,11 +3105,11 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->se.prev_sum_exec_runtime	= 0;
 	p->se.nr_migrations		= 0;
 	p->se.vruntime			= 0;
+#ifdef CONFIG_SCHED_WALT
 	p->last_sleep_ts		= 0;
 	p->boost			= 0;
 	p->boost_expires		= 0;
 	p->boost_period			= 0;
-#ifdef CONFIG_SCHED_WALT
 	p->low_latency			= 0;
 #endif
 	p->se.vlag			= 0;
@@ -6078,13 +6095,14 @@ long sched_getaffinity(pid_t pid, struct cpumask *mask)
 	raw_spin_lock_irqsave(&p->pi_lock, flags);
 	cpumask_and(mask, &p->cpus_allowed, cpu_active_mask);
 
+#ifdef CONFIG_SCHED_WALT
 	/* The userspace tasks are forbidden to run on
 	 * isolated CPUs. So exclude isolated CPUs from
 	 * the getaffinity.
 	 */
 	if (!(p->flags & PF_KTHREAD))
 		cpumask_andnot(mask, mask, cpu_isolated_mask);
-
+#endif
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 
 out_unlock:
@@ -7289,9 +7307,10 @@ void __init sched_init(void)
 		rq->idle_stamp = 0;
 		rq->avg_idle = 2*sysctl_sched_migration_cost;
 		rq->max_idle_balance_cost = sysctl_sched_migration_cost;
+#ifdef CONFIG_SCHED_WALT
 		rq->push_task = NULL;
 		walt_sched_init_rq(rq);
-
+#endif
 		INIT_LIST_HEAD(&rq->cfs_tasks);
 
 		rq_attach_root(rq, &def_root_domain);
@@ -8496,6 +8515,7 @@ const u32 sched_prio_to_wmult[40] = {
  /*  15 */ 119304647, 148102320, 186737708, 238609294, 286331153,
 };
 
+#ifdef CONFIG_SCHED_WALT
 /*
  *@boost:should be 0,1,2.
  *@period:boost time based on ms units.
@@ -8516,7 +8536,6 @@ int set_task_boost(int boost, u64 period)
 	return 0;
 }
 
-#ifdef CONFIG_SCHED_WALT
 /*
  * sched_exit() - Set EXITING_TASK_MARKER in task's ravg.demand field
  *
