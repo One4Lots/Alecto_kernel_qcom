@@ -4288,8 +4288,11 @@ again:
 	for_each_class(class) {
 		p = class->pick_next_task(rq, prev, rf);
 		if (p) {
-			if (unlikely(p == RETRY_TASK))
+			if (unlikely(p == RETRY_TASK)) {
+				put_prev_task(rq, prev);
+				prev = rq->idle;
 				goto again;
+			}
 			return p;
 		}
 	}
