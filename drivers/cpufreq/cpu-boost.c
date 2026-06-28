@@ -30,8 +30,8 @@ struct cpu_sync {
 	unsigned int input_boost_freq;
 };
 
-static unsigned int input_boost_ms = 20;
-static unsigned int fling_boost_ms = 20;
+static unsigned int input_boost_ms = 10;
+static unsigned int fling_boost_ms = 10;
 
 static DEFINE_PER_CPU(struct cpu_sync, sync_info);
 static struct workqueue_struct *cpu_boost_wq;
