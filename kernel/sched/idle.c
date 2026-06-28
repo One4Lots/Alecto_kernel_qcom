@@ -417,7 +417,7 @@ dequeue_task_idle(struct rq *rq, struct task_struct *p, int flags)
 
 static void put_prev_task_idle(struct rq *rq, struct task_struct *prev)
 {
-	rq_last_tick_reset(rq);
+	update_rq_avg_idle(rq);
 }
 
 static void task_tick_idle(struct rq *rq, struct task_struct *curr, int queued)
