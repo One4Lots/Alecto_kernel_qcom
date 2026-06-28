@@ -548,15 +548,14 @@ static int cpu_power_select(struct cpuidle_device *dev,
 	struct power_params *pwr_params;
 	uint64_t bias_time = 0;
 
-	if ((sleep_disabled && !cpu_isolated(dev->cpu)) ||
-	    is_reserved(dev->cpu) || sleep_us < 0)
+	if ((sleep_disabled) || is_reserved(dev->cpu) || sleep_us < 0)
 		return best_level;
 
 	idx_restrict = cpu->nlevels + 1;
 
 	next_event_us = (uint32_t)(ktime_to_us(get_next_event_time(dev->cpu)));
 
-	if (is_cpu_biased(dev->cpu, &bias_time) && (!cpu_isolated(dev->cpu))) {
+	if (is_cpu_biased(dev->cpu, &bias_time)) {
 		cpu->bias = bias_time;
 		goto done_select;
 	}
@@ -586,7 +585,7 @@ static int cpu_power_select(struct cpuidle_device *dev,
 				next_wakeup_us = next_event_us - lvl_latency_us;
 		}
 
-		if (!i && !cpu_isolated(dev->cpu)) {
+		if (!i) {
 			/*
 			 * If the next_wake_us itself is not sufficient for
 			 * deeper low power modes than clock gating do not

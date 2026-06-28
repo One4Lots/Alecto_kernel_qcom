@@ -968,10 +968,7 @@ void init_sched_groups_capacity(int cpu, struct sched_domain *sd)
 	do {
 		int cpu, max_cpu = -1;
 
-		cpumask_andnot(&avail_mask, sched_group_span(sg),
-							cpu_isolated_mask);
 		sg->group_weight = cpumask_weight(&avail_mask);
-
 		if (!(sd->flags & SD_ASYM_PACKING))
 			goto next;
 
