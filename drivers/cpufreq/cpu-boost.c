@@ -17,7 +17,6 @@
 #include <linux/init.h>
 #include <linux/cpufreq.h>
 #include <linux/cpu.h>
-#include <linux/sched.h>
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <linux/input.h>
@@ -36,8 +35,6 @@ static unsigned int fling_boost_ms = 10;
 static DEFINE_PER_CPU(struct cpu_sync, sync_info);
 static struct workqueue_struct *cpu_boost_wq;
 static struct work_struct input_boost_work;
-static unsigned int sched_boost_on_input;
-static bool sched_boost_active;
 static struct delayed_work input_boost_rem;
 static u64 last_input_time;
 #define MIN_INPUT_INTERVAL (150 * USEC_PER_MSEC)
@@ -158,7 +155,7 @@ static void update_policy_online(void)
 
 static void do_input_boost_rem(struct work_struct *work)
 {
-	unsigned int i, ret;
+	unsigned int i;
 	struct cpu_sync *i_sync_info;
 
 	/* Reset the input_boost_min for all CPUs in the system */
@@ -170,26 +167,15 @@ static void do_input_boost_rem(struct work_struct *work)
 
 	/* Update policies for all online CPUs */
 	update_policy_online();
-
-	if (sched_boost_active) {
-		ret = sched_set_boost(0);
-		if (ret)
-			pr_debug("cpu-boost: sched boost disable failed\n");
-		sched_boost_active = false;
-	}
 }
 
 static void do_input_boost(struct work_struct *work)
 {
 	unsigned int fps = dsi_panel_get_refresh_rate();
-	unsigned int i, ret;
+	unsigned int i;
 	struct cpu_sync *i_sync_info;
 
 	cancel_delayed_work_sync(&input_boost_rem);
-	if (sched_boost_active) {
-		sched_set_boost(0);
-		sched_boost_active = false;
-	}
 
 	/* Set the input_boost_min for all CPUs based on current refresh rate */
 	pr_debug("Setting input boost min for all CPUs\n");
@@ -206,15 +192,6 @@ static void do_input_boost(struct work_struct *work)
 
 	/* Update policies for all online CPUs */
 	update_policy_online();
-
-	/* Enable scheduler boost to migrate tasks to big cluster */
-	if (sched_boost_on_input > 0) {
-		ret = sched_set_boost(sched_boost_on_input);
-		if (ret)
-			pr_debug("cpu-boost: sched boost enable failed\n");
-		else
-			sched_boost_active = true;
-	}
 
 	queue_delayed_work(cpu_boost_wq, &input_boost_rem,
 				msecs_to_jiffies(input_boost_ms));
