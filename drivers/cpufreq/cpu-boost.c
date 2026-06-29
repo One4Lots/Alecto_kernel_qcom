@@ -1,14 +1,6 @@
 /*
  * Copyright (c) 2013-2015,2017, The Linux Foundation. All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) "cpu-boost: " fmt
@@ -17,20 +9,17 @@
 #include <linux/init.h>
 #include <linux/cpufreq.h>
 #include <linux/cpu.h>
-#include <linux/moduleparam.h>
+#include <linux/ktime.h>
 #include <linux/slab.h>
 #include <linux/input.h>
-#include <linux/time.h>
 #include <drm/drm_refresh_rate.h>
 
 struct cpu_sync {
 	int cpu;
 	unsigned int input_boost_min;
-	unsigned int input_boost_freq;
 };
 
 static unsigned int input_boost_ms = 10;
-static unsigned int fling_boost_ms = 10;
 
 static DEFINE_PER_CPU(struct cpu_sync, sync_info);
 static struct workqueue_struct *cpu_boost_wq;
@@ -38,71 +27,6 @@ static struct work_struct input_boost_work;
 static struct delayed_work input_boost_rem;
 static u64 last_input_time;
 #define MIN_INPUT_INTERVAL (150 * USEC_PER_MSEC)
-
-static int set_input_boost_freq(const char *buf, const struct kernel_param *kp)
-{
-	int i, ntokens = 0;
-	unsigned int val, cpu;
-	const char *cp = buf;
-	bool enabled = false;
-
-	while ((cp = strpbrk(cp + 1, " :")))
-		ntokens++;
-
-	/* single number: apply to all CPUs */
-	if (!ntokens) {
-		if (sscanf(buf, "%u\n", &val) != 1)
-			return -EINVAL;
-		for_each_possible_cpu(i)
-			per_cpu(sync_info, i).input_boost_freq = val;
-		goto check_enable;
-	}
-
-	/* CPU:value pair */
-	if (!(ntokens % 2))
-		return -EINVAL;
-
-	cp = buf;
-	for (i = 0; i < ntokens; i += 2) {
-		if (sscanf(cp, "%u:%u", &cpu, &val) != 2)
-			return -EINVAL;
-		if (cpu >= num_possible_cpus())
-			return -EINVAL;
-
-		per_cpu(sync_info, cpu).input_boost_freq = val;
-		cp = strnchr(cp, PAGE_SIZE - (cp - buf), ' ');
-		cp++;
-	}
-
-check_enable:
-	for_each_possible_cpu(i) {
-		if (per_cpu(sync_info, i).input_boost_freq) {
-			enabled = true;
-			break;
-		}
-	}
-
-	return 0;
-}
-
-static int get_input_boost_freq(char *buf, const struct kernel_param *kp)
-{
-	int cnt = 0, cpu;
-	struct cpu_sync *s;
-
-	for_each_possible_cpu(cpu) {
-		s = &per_cpu(sync_info, cpu);
-		cnt += snprintf(buf + cnt, PAGE_SIZE - cnt,
-				"%d:%u ", cpu, s->input_boost_freq);
-	}
-	cnt += snprintf(buf + cnt, PAGE_SIZE - cnt, "\n");
-	return cnt;
-}
-
-static const struct kernel_param_ops param_ops_input_boost_freq = {
-	.set = set_input_boost_freq,
-	.get = get_input_boost_freq,
-};
 
 /*
  * The CPUFREQ_ADJUST notifier is used to override the current policy min to
@@ -158,14 +82,12 @@ static void do_input_boost_rem(struct work_struct *work)
 	unsigned int i;
 	struct cpu_sync *i_sync_info;
 
-	/* Reset the input_boost_min for all CPUs in the system */
 	pr_debug("Resetting input boost min for all CPUs\n");
 	for_each_possible_cpu(i) {
 		i_sync_info = &per_cpu(sync_info, i);
 		i_sync_info->input_boost_min = 0;
 	}
 
-	/* Update policies for all online CPUs */
 	update_policy_online();
 }
 
@@ -177,8 +99,10 @@ static void do_input_boost(struct work_struct *work)
 
 	cancel_delayed_work_sync(&input_boost_rem);
 
-	/* Set the input_boost_min for all CPUs based on current refresh rate */
-	pr_debug("Setting input boost min for all CPUs\n");
+	/*
+	 * Set input_boost_min per-CPU based on current refresh rate.
+	 */
+	pr_debug("Setting input boost min for all CPUs (fps=%u)\n", fps);
 	for_each_possible_cpu(i) {
 		i_sync_info = &per_cpu(sync_info, i);
 		if (fps <= 30) {
@@ -190,11 +114,10 @@ static void do_input_boost(struct work_struct *work)
 		}
 	}
 
-	/* Update policies for all online CPUs */
 	update_policy_online();
 
 	queue_delayed_work(cpu_boost_wq, &input_boost_rem,
-				msecs_to_jiffies(input_boost_ms));
+			   msecs_to_jiffies(input_boost_ms));
 }
 
 static void cpuboost_input_event(struct input_handle *handle,
@@ -277,11 +200,11 @@ static const struct input_device_id cpuboost_ids[] = {
 };
 
 static struct input_handler cpuboost_input_handler = {
-	.event          = cpuboost_input_event,
-	.connect        = cpuboost_input_connect,
-	.disconnect     = cpuboost_input_disconnect,
-	.name           = "cpu-boost",
-	.id_table       = cpuboost_ids,
+	.event		= cpuboost_input_event,
+	.connect	= cpuboost_input_connect,
+	.disconnect	= cpuboost_input_disconnect,
+	.name		= "cpu-boost",
+	.id_table	= cpuboost_ids,
 };
 
 void kgsl_cmdbatch_retired_hook(void)
@@ -302,19 +225,15 @@ void kgsl_cmdbatch_retired_hook(void)
 
 static int cpu_boost_init(void)
 {
-        int cpu, ret;
-        struct cpu_sync *s;
-
-        cpu_boost_wq = alloc_workqueue("cpuboost_wq", WQ_HIGHPRI, 0);
-        if (!cpu_boost_wq)
-                return -EFAULT;
+	cpu_boost_wq = alloc_workqueue("cpuboost_wq", WQ_HIGHPRI, 0);
+	if (!cpu_boost_wq)
+		return -EFAULT;
 
         INIT_WORK(&input_boost_work, do_input_boost);
         INIT_DELAYED_WORK(&input_boost_rem, do_input_boost_rem);
 
         cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
 
-        ret = input_register_handler(&cpuboost_input_handler);
-        return 0;
+	return input_register_handler(&cpuboost_input_handler);
 }
 late_initcall(cpu_boost_init);
