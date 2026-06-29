@@ -4327,7 +4327,6 @@ static int dsi_display_dfps_update(struct dsi_display *display,
 	struct dsi_mode_info *timing;
 	struct dsi_display_ctrl *m_ctrl, *ctrl;
 	struct dsi_display_mode *panel_mode;
-	struct dsi_dfps_capabilities dfps_caps;
 	struct dsi_dyn_clk_caps *dyn_clk_caps;
 	int rc = 0;
 	int i = 0;
@@ -4338,19 +4337,17 @@ static int dsi_display_dfps_update(struct dsi_display *display,
 	}
 	timing = &dsi_mode->timing;
 
-	dsi_panel_get_dfps_caps(display->panel, &dfps_caps);
 	dyn_clk_caps = &(display->panel->dyn_clk_caps);
-	if (!dfps_caps.dfps_support && !dyn_clk_caps->maintain_const_fps) {
+	if (!display->panel->dfps_caps.dfps_support &&
+	    !dyn_clk_caps->maintain_const_fps) {
 		pr_err("dfps or constant fps not supported\n");
 		return -ENOTSUPP;
 	}
 
-	if (dfps_caps.type == DSI_DFPS_IMMEDIATE_CLK) {
+	if (display->panel->dfps_caps.type == DSI_DFPS_IMMEDIATE_CLK) {
 		pr_err("dfps clock method not supported\n");
 		return -ENOTSUPP;
 	}
-
-	/* For split DSI, update the clock master first */
 
 	pr_debug("configuring seamless dynamic fps\n\n");
 	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
@@ -4363,7 +4360,6 @@ static int dsi_display_dfps_update(struct dsi_display *display,
 		goto error;
 	}
 
-	/* Update the rest of the controllers */
 	display_for_each_ctrl(i, display) {
 		ctrl = &display->ctrl[i];
 		if (!ctrl->ctrl || (ctrl == m_ctrl))
@@ -4379,12 +4375,6 @@ static int dsi_display_dfps_update(struct dsi_display *display,
 
 	panel_mode = display->panel->cur_mode;
 	memcpy(panel_mode, dsi_mode, sizeof(*panel_mode));
-	/*
-	 * dsi_mode_flags flags are used to communicate with other drm driver
-	 * components, and are transient. They aren't inherently part of the
-	 * display panel's mode and shouldn't be saved into the cached currently
-	 * active mode.
-	 */
 	panel_mode->dsi_mode_flags = 0;
 	WRITE_ONCE(cur_refresh_rate, timing->refresh_rate);
 
@@ -4484,20 +4474,29 @@ static int dsi_display_get_dfps_timing(struct dsi_display *display,
 	adjust_timing_by_ctrl_count(display, &per_ctrl_mode);
 
 	if (!curr_refresh_rate) {
+		if (display->panel->cur_mode) {
+			curr_refresh_rate =
+				display->panel->cur_mode->timing.refresh_rate;
+			if (curr_refresh_rate != adj_mode->timing.refresh_rate &&
+			    display->panel->cur_mode->timing.h_active ==
+				    adj_mode->timing.h_active &&
+			    display->panel->cur_mode->timing.v_active ==
+				    adj_mode->timing.v_active) {
+				goto calc_porch;
+			}
+		} else {
+			pr_err("cur_mode is not initialized\n");
+			return -EINVAL;
+		}
+
 		if (!dsi_display_is_seamless_dfps_possible(display,
 				&per_ctrl_mode, dfps_caps.type)) {
 			pr_err("seamless dynamic fps not supported for mode\n");
 			return -EINVAL;
 		}
-		if (display->panel->cur_mode) {
-			curr_refresh_rate =
-				display->panel->cur_mode->timing.refresh_rate;
-		} else {
-			pr_err("cur_mode is not initialized\n");
-			return -EINVAL;
-		}
 	}
-	/* TODO: Remove this direct reference to the dsi_ctrl */
+
+calc_porch:
 	timing = &per_ctrl_mode.timing;
 	overlap_pixels = per_ctrl_mode.priv_info->overlap_pixels;
 
@@ -4548,8 +4547,7 @@ static bool dsi_display_validate_mode_seamless(struct dsi_display *display,
 		pr_debug("Dynamic FPS not supported for seamless\n");
 	} else {
 		pr_debug("Mode switch is seamless Dynamic FPS\n");
-		adj_mode->dsi_mode_flags |= DSI_MODE_FLAG_DFPS |
-				DSI_MODE_FLAG_VBLANK_PRE_MODESET;
+		adj_mode->dsi_mode_flags |= DSI_MODE_FLAG_DFPS;
 	}
 
 	return rc;
@@ -6744,7 +6742,9 @@ int dsi_display_set_mode(struct dsi_display *display,
 		}
 	}
 
-	memcpy(display->panel->cur_mode, &adj_mode, sizeof(adj_mode));
+	/* Skip redundant memcpy if DFPS already updated cur_mode */
+	if (!(adj_mode.dsi_mode_flags & (DSI_MODE_FLAG_DFPS | DSI_MODE_FLAG_VRR)))
+		memcpy(display->panel->cur_mode, &adj_mode, sizeof(adj_mode));
 error:
 	mutex_unlock(&display->display_lock);
 	return rc;
