@@ -1685,6 +1685,14 @@ static inline void set_next_task(struct rq *rq, struct task_struct *p)
 
 	/* The running task is never eligible for pushing */
 	dequeue_pushable_task(rq, p);
+
+	/*
+	 * If prev task was rt, put_prev_task_rt() has already updated the
+	 * utilization. We only care about the case where we start to schedule
+	 * an rt task from a non-rt class.
+	 */
+	if (rq->curr->sched_class != &rt_sched_class)
+		update_rt_rq_load_avg(rq_clock_pelt(rq), rq, 0);
 }
 
 static struct sched_rt_entity *pick_next_rt_entity(struct rq *rq,
@@ -1762,10 +1770,6 @@ pick_next_task_rt(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 
 	rt_queue_push_tasks(rq);
 
-	if (p)
-		update_rt_rq_load_avg(rq_clock_pelt(rq), rq,
-					rq->curr->sched_class == &rt_sched_class);
-
 	return p;
 }
 
@@ -1773,8 +1777,7 @@ static void put_prev_task_rt(struct rq *rq, struct task_struct *p)
 {
 	update_curr_rt(rq);
 
-	update_rt_rq_load_avg(rq_clock_pelt(rq), rq,
- 1);
+	update_rt_rq_load_avg(rq_clock_pelt(rq), rq, 1);
 
 	/*
 	 * The previous task needs to be made eligible for pushing
