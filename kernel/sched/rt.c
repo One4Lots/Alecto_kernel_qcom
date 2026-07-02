@@ -1758,14 +1758,20 @@ pick_next_task_rt(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	/*
 	 * We may dequeue prev's rt_rq in put_prev_task().
 	 * So, we update time before rt_nr_running check.
+	 *
+	 * Only do this when prev is truly the current task. core.c may
+	 * pass rq->idle as prev after a RETRY_TASK loop, in which case
+	 * prev != rq->curr and calling put_prev_task/update_curr_rt would
+	 * trigger WARN_ON_ONCE(rq->curr != prev).
 	 */
-	if (prev && prev->sched_class == &rt_sched_class)
+	if (prev && prev == rq->curr && prev->sched_class == &rt_sched_class)
 		update_curr_rt(rq);
 
 	if (!rt_rq->rt_queued)
 		return NULL;
 
-	put_prev_task(rq, prev);
+	if (prev && prev == rq->curr)
+		put_prev_task(rq, prev);
 
 	p = _pick_next_task_rt(rq);
 
