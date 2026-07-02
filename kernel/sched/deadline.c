@@ -1732,6 +1732,9 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		 * means a stop task can slip in, in which case we need to
 		 * re-start task selection.
 		 */
+		rq->clock_update_flags &= ~(RQCF_ACT_SKIP|RQCF_REQ_SKIP);
+		update_rq_clock(rq);
+
 		if (rq->stop && task_on_rq_queued(rq->stop))
 			return RETRY_TASK;
 	}
