@@ -674,7 +674,14 @@ static ssize_t show_##file_name				\
 show_one(cpuinfo_min_freq, cpuinfo.min_freq);
 show_one(cpuinfo_max_freq, cpuinfo.max_freq);
 show_one(cpuinfo_transition_latency, cpuinfo.transition_latency);
-show_one(scaling_min_freq, min);
+
+/*
+ * A hack that best with FAS and disabled userspace flooring.
+ */
+static ssize_t show_scaling_min_freq(struct cpufreq_policy *policy, char *buf)
+{
+	return sprintf(buf, "%u\n", policy->user_policy.min);
+}
 show_one(scaling_max_freq, max);
 
 __weak unsigned int arch_freq_get_on_cpu(int cpu)
