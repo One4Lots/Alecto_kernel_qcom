@@ -1269,16 +1269,25 @@ static bool psci_enter_sleep(struct lpm_cpu *cpu, int idx, bool from_idle)
 static int lpm_cpuidle_select(struct cpuidle_driver *drv,
 		struct cpuidle_device *dev, bool *stop_tick)
 {
-	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
-	ktime_t delta_next;
-	ktime_t duration = tick_nohz_get_sleep_length(&delta_next);
-	if (duration <= TICK_NSEC)
-		*stop_tick = false;
+	/*
+	 * runtime idle (screen-on / active-use) never attempts
+	 * per-cpu PSCI cluster power-collapse. The predictive engine in
+	 * cpu_power_select() was repeatedly selecting idx > 0 for short,
+	 * frequently mispredicted idle windows during active use, paying
+	 * PSCI/rail retention entry-exit overhead more often than it saved.
+	 * Deep power-collapse is still available through the s2idle/suspend
+	 * path (lpm_cpuidle_s2idle), which is untouched.
+	 */
+#ifdef CONFIG_NO_HZ_COMMON
+	{
+		ktime_t delta_next;
+		s64 duration_ns = tick_nohz_get_sleep_length(&delta_next);
 
-	if (!cpu)
-		return 0;
-
-	return cpu_power_select(dev, cpu, ktime_to_us(duration));
+		if (duration_ns <= TICK_NSEC)
+			*stop_tick = false;
+	}
+#endif
+	return 0;
 }
 
 void update_ipi_history(int cpu)
@@ -1332,6 +1341,24 @@ static void update_history(struct cpuidle_device *dev, int idx)
 static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 		struct cpuidle_driver *drv, int idx)
 {
+	/*
+	 * runtime idle: idx is always 0 here (lpm_cpuidle_select
+	 * no longer picks deeper states at runtime), so skip the
+	 * cpu_prepare/cluster_prepare/cluster_select bookkeeping and the
+	 * PSCI call entirely -- just clock-gate via cpu_do_idle(), same as
+	 * psci_enter_sleep()'s own idx==0 fast path would have done, but
+	 * without paying the cluster-sync overhead on every idle entry/exit.
+	 * Deep cluster power-collapse still happens through the s2idle path.
+	 */
+	if (!idx) {
+		stop_critical_timings();
+		cpu_do_idle();
+		start_critical_timings();
+		local_irq_enable();
+		return idx;
+	}
+
+	{
 	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
 	bool success = false;
 	const struct cpumask *cpumask = get_cpu_mask(dev->cpu);
@@ -1369,6 +1396,7 @@ exit:
 	}
 	local_irq_enable();
 	return idx;
+	}
 }
 
 static void lpm_cpuidle_s2idle(struct cpuidle_device *dev,
