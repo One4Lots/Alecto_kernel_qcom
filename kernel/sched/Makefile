@@ -35,4 +35,4 @@ obj-$(CONFIG_SCHED_WALT) += rotation_ctl.o
 endif
 obj-$(CONFIG_CPU_ISOLATION) += isolation.o
 obj-$(CONFIG_PSI) += psi.o
-obj-y += fas.o
+obj-$(CONFIG_SCHED_FAS) += fas.o
