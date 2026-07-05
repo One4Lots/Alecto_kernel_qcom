@@ -44,6 +44,7 @@
 #include <linux/ctype.h>
 #include <linux/debugfs.h>
 #include <linux/delayacct.h>
+#include <linux/energy_model.h>
 #include <linux/init_task.h>
 #include <linux/irq_work.h>
 #include <linux/kernel_stat.h>
@@ -654,14 +655,6 @@ do {                                                                    \
 #define entity_is_task(se)	1
 #endif
 
-static inline unsigned long se_weight(struct sched_entity *se)
-{
-	if (entity_is_task(se))
-		return scale_load_down(se->load.weight);
-
-	return scale_load_down(se->runnable_weight);
-}
-
 static inline unsigned long se_runnable(struct sched_entity *se)
 {
 	if (entity_is_task(se))
@@ -897,17 +890,36 @@ struct dl_rq {
 };
 
 #ifdef CONFIG_SMP
+/*
+ * XXX we want to get rid of these helpers and use the full load resolution.
+ */
+static inline long se_weight(struct sched_entity *se)
+{
+	return scale_load_down(se->load.weight);
+}
+
 
 static inline bool sched_asym_prefer(int a, int b)
 {
 	return arch_asym_cpu_priority(a) > arch_asym_cpu_priority(b);
 }
 
+struct perf_domain {
+	struct em_perf_domain *em_pd;
+	struct perf_domain *next;
+	struct rcu_head rcu;
+};
+
 struct max_cpu_capacity {
 	raw_spinlock_t lock;
 	unsigned long val;
 	int cpu;
 };
+
+/* Scheduling group status flags */
+#define SG_OVERLOAD		0x1 /* More than one runnable task on a CPU. */
+#define SG_OVERUTILIZED		0x2 /* One or more CPUs are over-utilized. */
+#define SG_HAS_MISFIT_TASK	0x4 /* Group has misfit task. */
 
 /*
  * We add the notion of a root-domain which will be used to define per-domain
@@ -930,6 +942,7 @@ struct root_domain {
 	 * - Running task is misfit
 	 */
 	int overload;
+
 	int overutilized;
 
 	/*
@@ -3165,6 +3178,20 @@ unsigned long scale_irq_capacity(unsigned long util, unsigned long irq, unsigned
 {
 	return util;
 }
+#endif
+
+#ifdef CONFIG_ENERGY_MODEL
+#define perf_domain_span(pd) (to_cpumask(((pd)->em_pd->cpus)))
+DECLARE_STATIC_KEY_FALSE(sched_energy_present);
+
+static inline bool sched_energy_enabled(void)
+{
+	return static_branch_unlikely(&sched_energy_present);
+}
+
+#else
+#define perf_domain_span(pd) NULL
+static inline bool sched_energy_enabled(void) { return false; }
 #endif
 
 enum sched_boost_policy {
