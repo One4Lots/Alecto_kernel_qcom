@@ -117,7 +117,6 @@ struct task_struct init_task
 	.thread_node	= LIST_HEAD_INIT(init_signals.thread_head),
 	INIT_IDS
 	INIT_PERF_EVENTS(init_task)
-	INIT_TRACE_IRQFLAGS
 	INIT_LOCKDEP
 	INIT_FTRACE_GRAPH
 	INIT_TRACE_RECURSION

@@ -15,9 +15,20 @@
 #include <linux/typecheck.h>
 #include <asm/irqflags.h>
 
-#ifdef CONFIG_TRACE_IRQFLAGS
+/* Currently trace_softirqs_on/off is used only by lockdep */
+#ifdef CONFIG_PROVE_LOCKING
   extern void trace_softirqs_on(unsigned long ip);
   extern void trace_softirqs_off(unsigned long ip);
+  extern void lockdep_hardirqs_on(unsigned long ip);
+  extern void lockdep_hardirqs_off(unsigned long ip);
+#else
+  static inline void trace_softirqs_on(unsigned long ip) { }
+  static inline void trace_softirqs_off(unsigned long ip) { }
+  static inline void lockdep_hardirqs_on(unsigned long ip) { }
+  static inline void lockdep_hardirqs_off(unsigned long ip) { }
+#endif
+
+#ifdef CONFIG_TRACE_IRQFLAGS
   extern void trace_hardirqs_on(void);
   extern void trace_hardirqs_off(void);
 # define trace_hardirq_context(p)	((p)->hardirq_context)
@@ -27,12 +38,10 @@
 # define trace_hardirq_enter()			\
 do {						\
 	current->hardirq_context++;		\
-	crossrelease_hist_start(XHLOCK_HARD);	\
 } while (0)
 # define trace_hardirq_exit()			\
 do {						\
 	current->hardirq_context--;		\
-	crossrelease_hist_end(XHLOCK_HARD);	\
 } while (0)
 # define lockdep_softirq_enter()		\
 do {						\
@@ -42,19 +51,26 @@ do {						\
 # define trace_hardirq_threaded()		\
 do {						\
 	current->hardirq_threaded = 1;		\
-	crossrelease_hist_start(XHLOCK_SOFT);	\
 } while (0)
 # define lockdep_softirq_exit()			\
 do {						\
 	current->softirq_context--;		\
-	crossrelease_hist_end(XHLOCK_SOFT);	\
 } while (0)
-# define INIT_TRACE_IRQFLAGS	.softirqs_enabled = 1,
+
+# define lockdep_irq_work_enter(_flags)					\
+	  do {								\
+		  if (!((_flags) & IRQ_WORK_HARD_IRQ))			\
+			current->irq_config = 1;			\
+	  } while (0)
+# define lockdep_irq_work_exit(_flags)					\
+	  do {								\
+		  if (!((_flags) & IRQ_WORK_HARD_IRQ))			\
+			current->irq_config = 0;			\
+	  } while (0)
+
 #else
 # define trace_hardirqs_on()		do { } while (0)
 # define trace_hardirqs_off()		do { } while (0)
-# define trace_softirqs_on(ip)		do { } while (0)
-# define trace_softirqs_off(ip)		do { } while (0)
 # define trace_hardirq_context(p)	0
 # define trace_softirq_context(p)	0
 # define trace_hardirqs_enabled(p)	0
@@ -64,7 +80,8 @@ do {						\
 # define trace_hardirq_exit()		do { } while (0)
 # define lockdep_softirq_enter()	do { } while (0)
 # define lockdep_softirq_exit()		do { } while (0)
-# define INIT_TRACE_IRQFLAGS
+# define lockdep_irq_work_enter(__work)		do { } while (0)
+# define lockdep_irq_work_exit(__work)		do { } while (0)
 #endif
 
 #if defined(CONFIG_IRQSOFF_TRACER) || \
