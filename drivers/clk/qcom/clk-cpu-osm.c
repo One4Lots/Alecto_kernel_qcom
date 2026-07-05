@@ -39,6 +39,8 @@
 #include "clk-voter.h"
 #include "clk-debug.h"
 
+#include <linux/energy_model.h>
+
 #define OSM_INIT_RATE			300000000UL
 #define XO_RATE				19200000UL
 #define OSM_TABLE_SIZE			40
@@ -661,6 +663,93 @@ static bool osm_dt_find_freq(u32 *of_table, int of_len, long frequency)
 	return false;
 }
 
+#ifdef CONFIG_ENERGY_MODEL
+
+struct em_freq_power {
+	unsigned int freq_khz;
+	unsigned long power_mw;
+};
+
+/* Per-core power in mW mapped from atoll.dtsi CPU_COST_0 (Little/Silver) */
+static const struct em_freq_power em_silver_def[] = {
+	{ 576000, 51 },
+	{ 768000, 63 },
+	{ 1017600, 79 },
+	{ 1248000, 95 },
+	{ 1324800, 100 },
+	{ 1516800, 112 },
+	{ 1612800, 122 },
+	{ 1708800, 132 },
+	{ 1804800, 153 },
+};
+
+/* Per-core power in mW mapped from atoll.dtsi CPU_COST_1 (Big/Gold) */
+static const struct em_freq_power em_gold_def[] = {
+	{ 652800, 110 },
+	{ 825600, 128 },
+	{ 979200, 156 },
+	{ 1113600, 184 },
+	{ 1267200, 213 },
+	{ 1555200, 292 },
+	{ 1708800, 345 },
+	{ 1843200, 388 },
+	{ 1900800, 406 },
+	{ 1996800, 446 },
+	{ 2112000, 530 },
+	{ 2208000, 549 },
+	{ 2323200, 599 },
+};
+
+static const struct em_freq_power *osm_em_get_table(int cpu, unsigned int *size)
+{
+	/*
+	 * Mapping directly to the 6+2 cluster layout.
+	 */
+	if (cpu <= 5) {
+		*size = ARRAY_SIZE(em_silver_def);
+		return em_silver_def;
+	} else {
+		*size = ARRAY_SIZE(em_gold_def);
+		return em_gold_def;
+	}
+}
+
+static int osm_em_active_power(unsigned long *power, unsigned long *freq, int cpu)
+{
+	const struct em_freq_power *table;
+	unsigned int size, i;
+	unsigned long freq_khz = *freq / 1000;
+
+	table = osm_em_get_table(cpu, &size);
+
+	for (i = 0; i < size; i++) {
+		if (table[i].freq_khz >= freq_khz) {
+			*freq  = (unsigned long)table[i].freq_khz * 1000;
+			*power = table[i].power_mw;
+			return 0;
+		}
+	}
+
+	/* freq above table max — clamp to last entry */
+	*freq  = (unsigned long)table[size - 1].freq_khz * 1000;
+	*power = table[size - 1].power_mw;
+	return 0;
+}
+
+static struct em_data_callback osm_em_cb = EM_DATA_CB(osm_em_active_power);
+
+static void osm_register_em(struct cpufreq_policy *policy)
+{
+	unsigned int size;
+
+	osm_em_get_table(policy->cpu, &size);
+	em_register_perf_domain(policy->cpus, size, &osm_em_cb);
+}
+
+#else
+static inline void osm_register_em(struct cpufreq_policy *policy) {}
+#endif /* CONFIG_ENERGY_MODEL */
+
 static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 {
 	struct cpufreq_frequency_table *table;
@@ -773,6 +862,8 @@ static int osm_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	cpumask_copy(policy->cpus, &c->related_cpus);
 
 	kfree(of_table);
+	osm_register_em(policy);
+
 	return 0;
 
 err:

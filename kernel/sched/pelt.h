@@ -37,7 +37,7 @@ update_irq_load_avg(struct rq *rq, u64 running)
 }
 #endif
 
-#define PELT_MIN_DIVIDER	(LOAD_AVG_MAX - 1024)
+#define PELT_MIN_DIVIDER       (LOAD_AVG_MAX - 1024)
 
 static inline u32 get_pelt_divider(struct sched_avg *avg)
 {
@@ -72,7 +72,7 @@ static inline u64 rq_clock_pelt(struct rq *rq)
 /* The rq is idle, we can sync to clock_task */
 static inline void _update_idle_rq_clock_pelt(struct rq *rq)
 {
-	rq->clock_pelt	= rq_clock_task(rq);
+	rq->clock_pelt  = rq_clock_task(rq);
 
 	u64_u32_store(rq->clock_idle, rq_clock(rq));
 	/* Paired with smp_rmb in migrate_se_pelt_lag() */
@@ -231,3 +231,5 @@ update_idle_rq_clock_pelt(struct rq *rq) { }
 
 static inline void update_idle_cfs_rq_clock_pelt(struct cfs_rq *cfs_rq) { }
 #endif
+
+
