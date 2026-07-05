@@ -27,12 +27,6 @@
 #define SD_NUMA			0x2000	/* cross-node balancing */
 #define SD_ASYM_CPUCAPACITY_FULL 0x4000 /* Domain members have different CPU capacities spanning all unique CPU capacity values */
 
-/*
- * Increase resolution of cpu_capacity calculations
- */
-#define SCHED_CAPACITY_SHIFT	SCHED_FIXEDPOINT_SHIFT
-#define SCHED_CAPACITY_SCALE	(1L << SCHED_CAPACITY_SHIFT)
-
 #ifdef CONFIG_SCHED_SMT
 static inline int cpu_smt_flags(void)
 {
@@ -248,6 +242,22 @@ static inline bool cpus_share_cache(int this_cpu, int that_cpu)
 }
 
 #endif	/* !CONFIG_SMP */
+
+#ifndef arch_scale_cpu_capacity
+static __always_inline
+unsigned long arch_scale_cpu_capacity(int cpu)
+{
+	return SCHED_CAPACITY_SCALE;
+}
+#endif
+
+#ifndef arch_scale_thermal_pressure
+static __always_inline
+unsigned long arch_scale_thermal_pressure(int cpu)
+{
+	return 0;
+}
+#endif
 
 static inline int task_node(const struct task_struct *p)
 {

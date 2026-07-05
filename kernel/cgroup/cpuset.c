@@ -60,6 +60,7 @@
 #include <linux/oom.h>
 #include <linux/binfmts.h>
 
+#include <linux/sched/isolation.h>
 #include <linux/uaccess.h>
 #include <linux/atomic.h>
 #include <linux/mutex.h>
@@ -682,10 +683,6 @@ static int generate_sched_domains(cpumask_var_t **domains,
 	dattr = NULL;
 	csa = NULL;
 
-	if (!alloc_cpumask_var(&non_isolated_cpus, GFP_KERNEL))
-		goto done;
-	cpumask_andnot(non_isolated_cpus, cpu_possible_mask, cpu_isolated_map);
-
 	/* Special case for the 99% of systems with one, full, sched domain */
 	if (is_sched_load_balance(&top_cpuset)) {
 		ndoms = 1;
@@ -699,7 +696,7 @@ static int generate_sched_domains(cpumask_var_t **domains,
 			update_domain_attr_tree(dattr, &top_cpuset);
 		}
 		cpumask_and(doms[0], top_cpuset.effective_cpus,
-				     non_isolated_cpus);
+			    housekeeping_cpumask(HK_FLAG_DOMAIN));
 
 		goto done;
 	}
@@ -723,7 +720,8 @@ static int generate_sched_domains(cpumask_var_t **domains,
 		 */
 		if (!cpumask_empty(cp->cpus_allowed) &&
 		    !(is_sched_load_balance(cp) &&
-		      cpumask_intersects(cp->cpus_allowed, non_isolated_cpus)))
+		      cpumask_intersects(cp->cpus_allowed,
+					 housekeeping_cpumask(HK_FLAG_DOMAIN))))
 			continue;
 
 		if (is_sched_load_balance(cp))
@@ -805,7 +803,7 @@ restart:
 
 			if (apn == b->pn) {
 				cpumask_or(dp, dp, b->effective_cpus);
-				cpumask_and(dp, dp, non_isolated_cpus);
+				cpumask_and(dp, dp, housekeeping_cpumask(HK_FLAG_DOMAIN));
 				if (dattr)
 					update_domain_attr_tree(dattr + nslot, b);
 

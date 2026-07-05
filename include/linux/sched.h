@@ -220,43 +220,6 @@ enum migrate_types {
 	RQ_TO_GROUP,
 };
 
-extern cpumask_var_t			cpu_isolated_map;
-
-#ifdef CONFIG_HOTPLUG_CPU
-extern int sched_isolate_count(const cpumask_t *mask, bool include_offline);
-extern int sched_isolate_cpu(int cpu);
-extern int sched_unisolate_cpu(int cpu);
-extern int sched_unisolate_cpu_unlocked(int cpu);
-#else
-static inline int sched_isolate_count(const cpumask_t *mask,
-				      bool include_offline)
-{
-	cpumask_t count_mask;
-
-	if (include_offline)
-		cpumask_andnot(&count_mask, mask, cpu_online_mask);
-	else
-		return 0;
-
-	return cpumask_weight(&count_mask);
-}
-
-static inline int sched_isolate_cpu(int cpu)
-{
-	return 0;
-}
-
-static inline int sched_unisolate_cpu(int cpu)
-{
-	return 0;
-}
-
-static inline int sched_unisolate_cpu_unlocked(int cpu)
-{
-	return 0;
-}
-#endif
-
 extern void scheduler_tick(void);
 
 #define	MAX_SCHEDULE_TIMEOUT		LONG_MAX
@@ -459,7 +422,7 @@ struct sched_avg {
  * Since max value of util_est for a task is 1024 (PELT util_avg for a task)
  * it is safe to use MSB.
  */
-#define UTIL_EST_WEIGHT_SHIFT		4
+#define UTIL_EST_WEIGHT_SHIFT		5
 #define UTIL_AVG_UNCHANGED		0x80000000
 
 struct sched_statistics {
