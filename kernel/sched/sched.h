@@ -651,28 +651,6 @@ do {                                                                    \
 # define u64_u32_load(var)      u64_u32_load_copy(var, var##_copy)
 # define u64_u32_store(var, val) u64_u32_store_copy(var, var##_copy, val)
 
-#ifdef CONFIG_FAIR_GROUP_SCHED
-#define entity_is_task(se)	(!se->my_q)
-#else
-#define entity_is_task(se)	1
-#endif
-
-static inline unsigned long se_runnable(struct sched_entity *se)
-{
-	if (entity_is_task(se))
-		return !!se->on_rq;
-
-	return se->runnable_weight;
-}
-
-static inline void se_update_runnable(struct sched_entity *se)
-{
-#ifdef CONFIG_FAIR_GROUP_SCHED
-	if (!entity_is_task(se))
-		se->runnable_weight = se->my_q->h_nr_runnable;
-#endif
-}
-
 /* CFS-related fields in a runqueue */
 struct cfs_rq {
 	struct load_weight load;
@@ -893,6 +871,47 @@ struct dl_rq {
 	u64 bw_ratio;
 };
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+/* An entity is a task if it doesn't "own" a runqueue */
+#define entity_is_task(se)	(!se->my_q)
+
+static inline void se_update_runnable(struct sched_entity *se)
+{
+	if (!entity_is_task(se))
+		se->runnable_weight = se->my_q->h_nr_runnable;
+}
+
+static inline long se_runnable(struct sched_entity *se)
+{
+	if (se->sched_delayed)
+		return false;
+
+	if (entity_is_task(se))
+		return !!se->on_rq;
+	else
+		return se->runnable_weight;
+}
+
+#else
+#define entity_is_task(se)	1
+
+static inline void se_update_runnable(struct sched_entity *se) {}
+
+static inline long se_runnable(struct sched_entity *se)
+{
+	if (se->sched_delayed)
+		return false;
+
+	return !!se->on_rq;
+}
+#endif
+
+#ifdef CONFIG_RT_GROUP_SCHED
+#define rt_entity_is_task(rt_se) (!(rt_se)->my_q)
+#else /* CONFIG_RT_GROUP_SCHED */
+#define rt_entity_is_task(rt_se) (1)
+#endif /* CONFIG_RT_GROUP_SCHED */
+
 #ifdef CONFIG_SMP
 /*
  * XXX we want to get rid of these helpers and use the full load resolution.
@@ -1052,14 +1071,6 @@ struct uclamp_rq {
 
 DECLARE_STATIC_KEY_FALSE(sched_uclamp_used);
 #endif /* CONFIG_UCLAMP_TASK */
-
-#ifndef CONFIG_ENERGY_MODEL
-extern unsigned int sysctl_sched_energy_aware;
-static inline bool sched_energy_enabled(void)
-{
-	return sysctl_sched_energy_aware;
-}
-#endif
 
 /*
  * This is the main, per-CPU runqueue data structure.
