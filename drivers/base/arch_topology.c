@@ -21,8 +21,13 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/sched/topology.h>
-#include <linux/sched/energy.h>
+#include <linux/sched/sysctl.h>
 #include <linux/cpuset.h>
+
+bool topology_scale_freq_invariant(void)
+{
+	return cpufreq_supports_freq_invariance();
+}
 
 DEFINE_PER_CPU(unsigned long, freq_scale) = SCHED_CAPACITY_SCALE;
 DEFINE_PER_CPU(unsigned long, max_cpu_freq);
@@ -148,128 +153,7 @@ static int register_cpu_capacity_sysctl(void)
 }
 subsys_initcall(register_cpu_capacity_sysctl);
 
-enum asym_cpucap_type { no_asym, asym_thread, asym_core, asym_die };
-static enum asym_cpucap_type asym_cpucap = no_asym;
-enum share_cap_type { no_share_cap, share_cap_thread, share_cap_core, share_cap_die};
-static enum share_cap_type share_cap = no_share_cap;
-
-#ifdef CONFIG_CPU_FREQ
-int detect_share_cap_flag(void)
-{
-	int cpu;
-	enum share_cap_type share_cap_level = no_share_cap;
-	struct cpufreq_policy *policy;
-
-	for_each_possible_cpu(cpu) {
-		policy = cpufreq_cpu_get(cpu);
-
-		if (!policy)
-			return 0;
-
-		if (cpumask_equal(cpu_cpu_mask(cpu),
-				  policy->related_cpus)) {
-			share_cap_level = share_cap_die;
-			continue;
-		}
-
-		if (cpumask_equal(topology_core_cpumask(cpu),
-				  policy->related_cpus)) {
-			share_cap_level = share_cap_core;
-			continue;
-		}
-
-		if (cpumask_equal(topology_sibling_cpumask(cpu),
-				  policy->related_cpus)) {
-			share_cap_level = share_cap_thread;
-			continue;
-		}
-	}
-
-	if (share_cap != share_cap_level) {
-		share_cap = share_cap_level;
-		return 1;
-	}
-
-	return 0;
-}
-#else
-int detect_share_cap_flag(void) { return 0; }
-#endif
-
-/*
- * Walk cpu topology to determine sched_domain flags.
- *
- * SD_ASYM_CPUCAPACITY: Indicates the lowest level that spans all cpu
- * capacities found in the system for all cpus, i.e. the flag is set
- * at the same level for all systems. The current algorithm implements
- * this by looking for higher capacities, which doesn't work for all
- * conceivable topology, but don't complicate things until it is
- * necessary.
- */
-int topology_detect_flags(void)
-{
-	unsigned long max_capacity, capacity;
-	enum asym_cpucap_type asym_level = no_asym;
-	int cpu, die_cpu, core, thread, flags_changed = 0;
-
-	for_each_possible_cpu(cpu) {
-		max_capacity = 0;
-
-		if (asym_level >= asym_thread)
-			goto check_core;
-
-		for_each_cpu(thread, topology_sibling_cpumask(cpu)) {
-			capacity = topology_get_cpu_scale(thread);
-
-			if (capacity > max_capacity) {
-				if (max_capacity != 0)
-					asym_level = asym_thread;
-
-				max_capacity = capacity;
-			}
-		}
-
-check_core:
-		if (asym_level >= asym_core)
-			goto check_die;
-
-		for_each_cpu(core, topology_core_cpumask(cpu)) {
-			capacity = topology_get_cpu_scale(core);
-
-			if (capacity > max_capacity) {
-				if (max_capacity != 0)
-					asym_level = asym_core;
-
-				max_capacity = capacity;
-			}
-		}
-check_die:
-		for_each_possible_cpu(die_cpu) {
-			capacity = topology_get_cpu_scale(die_cpu);
-
-			if (capacity > max_capacity) {
-				if (max_capacity != 0) {
-					asym_level = asym_die;
-					goto done;
-				}
-			}
-		}
-	}
-
-done:
-	if (asym_cpucap != asym_level) {
-		asym_cpucap = asym_level;
-		flags_changed = 1;
-		pr_debug("topology flag change detected\n");
-	}
-
-	if (detect_share_cap_flag())
-		flags_changed = 1;
-
-	return flags_changed;
-}
-
-static int update_topology = 0;
+static int update_topology;
 
 int topology_update_cpu_topology(void)
 {

@@ -744,35 +744,37 @@ struct cfs_rq {
 #endif /* CONFIG_SMP */
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
-	struct rq *rq;	/* cpu runqueue to which this cfs_rq is attached */
+	struct rq		*rq;	/* CPU runqueue to which this cfs_rq is attached */
 
 	/*
 	 * leaf cfs_rqs are those that hold tasks (lowest schedulable entity in
 	 * a hierarchy). Non-leaf lrqs hold other higher schedulable entities
 	 * (like users, containers etc.)
 	 *
-	 * leaf_cfs_rq_list ties together list of leaf cfs_rq's in a cpu. This
-	 * list is used during load balance.
+	 * leaf_cfs_rq_list ties together list of leaf cfs_rq's in a CPU.
+	 * This list is used during load balance.
 	 */
-	int on_list;
-	struct list_head leaf_cfs_rq_list;
-	struct task_group *tg;	/* group that "owns" this runqueue */
+	int			on_list;
+	struct list_head	leaf_cfs_rq_list;
+	struct task_group	*tg;	/* group that "owns" this runqueue */
 
+#ifdef CONFIG_CFS_BANDWIDTH
 #ifdef CONFIG_SCHED_WALT
 	struct walt_sched_stats walt_stats;
 #endif
+	int			runtime_enabled;
+	s64			runtime_remaining;
 
-#ifdef CONFIG_CFS_BANDWIDTH
-	int runtime_enabled;
-	s64 runtime_remaining;
-
-	u64 throttled_clock, throttled_clock_pelt;
-	u64 throttled_clock_pelt_time;
-	int throttled, throttle_count;
-	struct list_head throttled_list;
-#ifdef CONFIG_SCHED_WALT
-	u64 cumulative_runnable_avg;
-#endif /* CONFIG_SCHED_WALT */
+	u64			throttled_pelt_idle;
+#ifndef CONFIG_64BIT
+	u64                     throttled_pelt_idle_copy;
+#endif
+	u64			throttled_clock;
+	u64			throttled_clock_pelt;
+	u64			throttled_clock_pelt_time;
+	int			throttled;
+	int			throttle_count;
+	struct list_head	throttled_list;
 #endif /* CONFIG_CFS_BANDWIDTH */
 #endif /* CONFIG_FAIR_GROUP_SCHED */
 };

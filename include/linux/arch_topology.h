@@ -9,38 +9,7 @@
 #include <linux/percpu.h>
 
 void topology_normalize_cpu_scale(void);
-int topology_detect_flags(void);
-int topology_smt_flags(void);
-int topology_core_flags(void);
-int topology_cpu_flags(void);
 int topology_update_cpu_topology(void);
-void topology_scale_freq_tick(void);
-
-/*
- * Priority ordering for freq scale sources. Higher value = higher priority.
- * ARCH (PMU counter based) wins over CPUFREQ (OPP transition based).
- */
-enum scale_freq_source {
-	SCALE_FREQ_SOURCE_CPUFREQ = 0,
-	SCALE_FREQ_SOURCE_ARCH,
-};
-
-struct scale_freq_data {
-	enum scale_freq_source source;
-	void (*set_freq_scale)(void);
-};
-
-/*
- * Register/unregister a scale_freq_data source for the given cpumask.
- * topology_set_scale_freq_source() installs data as the active source if it
- * has higher or equal priority than the current one (ARCH beats CPUFREQ).
- *
- * Stubs for now; real implementation arrives with mainline cherry-pick.
- */
-void topology_set_scale_freq_source(struct scale_freq_data *data,
-				    const struct cpumask *cpus);
-void topology_clear_scale_freq_source(struct scale_freq_data *data,
-				      const struct cpumask *cpus);
 
 struct device_node;
 bool topology_parse_cpu_capacity(struct device_node *cpu_node, int cpu);
@@ -78,6 +47,8 @@ static inline unsigned long topology_get_min_freq_scale(int cpu)
 {
 	return per_cpu(arch_min_freq_scale, cpu);
 }
+
+bool topology_scale_freq_invariant(void);
 
 DECLARE_PER_CPU(unsigned long, thermal_pressure);
 

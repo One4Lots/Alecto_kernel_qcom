@@ -277,7 +277,6 @@ void store_cpu_topology(unsigned int cpuid)
 
 topology_populated:
 	update_siblings_masks(cpuid);
-	topology_detect_flags();
 }
 
 #ifdef CONFIG_SCHED_SMT
