@@ -657,8 +657,6 @@ asmlinkage __visible void __init start_kernel(void)
 	kfence_init();
 	boot_init_stack_canary();
 
-	sched_clock_init();
-	printk_safe_init();
 	perf_event_init();
 	profile_init();
 	call_function_init();
@@ -667,6 +665,8 @@ asmlinkage __visible void __init start_kernel(void)
 	local_irq_enable();
 
 	kmem_cache_init_late();
+	sched_clock_init();
+	printk_safe_init();
 
 	/*
 	 * HACK ALERT! This is early. We're enabling the console before
