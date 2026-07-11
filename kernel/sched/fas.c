@@ -42,7 +42,6 @@ static struct delayed_work fas_boost_rem;
 
 static u64 fas_last_input_time;
 static unsigned int fas_active_fps;
-static unsigned long fas_next_boost;
 
 #define FAS_MIN_INPUT_INTERVAL (150 * USEC_PER_MSEC)
 
@@ -96,8 +95,9 @@ static void fas_do_boost(struct work_struct *work)
 	unsigned int i;
 
 	/*
-	 * If same fps tier is already active, just re-arm the expiry
-	 * timer — no need to walk per-cpu data or update policies again.
+	 * Already boosted at this refresh rate — just extend the window.
+	 * Avoids redundant frequency updates on every cmdbatch retirement
+	 * while still keeping the boost alive during continuous frame renders.
 	 */
 	if (fps == fas_active_fps) {
 		mod_delayed_work(fas_wq, &fas_boost_rem,
@@ -213,12 +213,19 @@ static struct input_handler fas_input_handler = {
 	.id_table	= fas_ids,
 };
 
+/*
+ * Called from KGSL on every cmdbatch retirement. We no longer gate this
+ * with fas_next_boost — the work_pending() guard in fas_queue_boost() is
+ * sufficient to avoid flooding the workqueue, and fas_do_boost() handles
+ * the steady-state case cheaply via mod_delayed_work(). Removing the
+ * jiffies gate ensures the boost window is continuously extended during
+ * rapid frame renders (e.g. scrolling at 120/130 Hz) without gaps.
+ */
 void kgsl_cmdbatch_retired_hook(void)
 {
-	if (time_before(jiffies, fas_next_boost))
+	if (dsi_panel_get_refresh_rate() <= 30)
 		return;
 
-	fas_next_boost = jiffies + msecs_to_jiffies(fas_boost_ms);
 	fas_queue_boost();
 }
 
