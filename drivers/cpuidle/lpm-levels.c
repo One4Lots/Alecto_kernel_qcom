@@ -1269,25 +1269,28 @@ static bool psci_enter_sleep(struct lpm_cpu *cpu, int idx, bool from_idle)
 static int lpm_cpuidle_select(struct cpuidle_driver *drv,
 		struct cpuidle_device *dev, bool *stop_tick)
 {
-	/*
-	 * runtime idle (screen-on / active-use) never attempts
-	 * per-cpu PSCI cluster power-collapse. The predictive engine in
-	 * cpu_power_select() was repeatedly selecting idx > 0 for short,
-	 * frequently mispredicted idle windows during active use, paying
-	 * PSCI/rail retention entry-exit overhead more often than it saved.
-	 * Deep power-collapse is still available through the s2idle/suspend
-	 * path (lpm_cpuidle_s2idle), which is untouched.
-	 */
+	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
+	int idx;
 #ifdef CONFIG_NO_HZ_COMMON
 	{
 		ktime_t delta_next;
 		s64 duration_ns = tick_nohz_get_sleep_length(&delta_next);
 
-		if (duration_ns <= TICK_NSEC)
-			*stop_tick = false;
-	}
+	if (duration_ns <= TICK_NSEC)
+		*stop_tick = false;
+#else
+	s64 duration_ns = KTIME_MAX;
 #endif
-	return 0;
+
+	for (idx = cpu->nlevels - 1; idx > 0; idx--) {
+		if (!lpm_cpu_mode_allow(dev->cpu, idx, true))
+			continue;
+		if ((s64)cpu->levels[idx].pwr.min_residency * NSEC_PER_USEC <=
+				duration_ns)
+			break;
+	}
+
+	return idx;
 }
 
 void update_ipi_history(int cpu)
