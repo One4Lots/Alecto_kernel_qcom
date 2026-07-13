@@ -1344,62 +1344,26 @@ static void update_history(struct cpuidle_device *dev, int idx)
 static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 		struct cpuidle_driver *drv, int idx)
 {
-	/*
-	 * runtime idle: idx is always 0 here (lpm_cpuidle_select
-	 * no longer picks deeper states at runtime), so skip the
-	 * cpu_prepare/cluster_prepare/cluster_select bookkeeping and the
-	 * PSCI call entirely -- just clock-gate via cpu_do_idle(), same as
-	 * psci_enter_sleep()'s own idx==0 fast path would have done, but
-	 * without paying the cluster-sync overhead on every idle entry/exit.
-	 * Deep cluster power-collapse still happens through the s2idle path.
-	 */
-	if (!idx) {
-		stop_critical_timings();
-		cpu_do_idle();
-		start_critical_timings();
-		local_irq_enable();
+	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
+	const struct cpumask *cpumask = get_cpu_mask(dev->cpu);
+	bool success;
+	int ret;
+
+	if (idx == 0) {
+		wfi();
 		return idx;
 	}
 
-	{
-	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
-	bool success = false;
-	const struct cpumask *cpumask = get_cpu_mask(dev->cpu);
-	ktime_t start = ktime_get();
-	uint64_t start_time = ktime_to_ns(start), end_time;
-
 	cpu_prepare(cpu, idx, true);
-	cluster_prepare(cpu->parent, cpumask, idx, true, start_time);
+	cluster_prepare(cpu->parent, cpumask, idx, true, 0);
 
-	trace_cpu_idle_enter(idx);
-	lpm_stats_cpu_enter(idx, start_time);
+	ret = psci_enter_sleep(cpu, idx, true);
+	success = (ret == 0);
 
-	if (need_resched())
-		goto exit;
-
-	success = psci_enter_sleep(cpu, idx, true);
-
-exit:
-	end_time = ktime_to_ns(ktime_get());
-	lpm_stats_cpu_exit(idx, end_time, success);
-
-	cluster_unprepare(cpu->parent, cpumask, idx, true, end_time, success);
+	cluster_unprepare(cpu->parent, cpumask, idx, true, 0, success);
 	cpu_unprepare(cpu, idx, true);
-	dev->last_residency = ktime_us_delta(ktime_get(), start);
-	update_history(dev, idx);
-	trace_cpu_idle_exit(idx, success);
-	if (lpm_prediction && cpu->lpm_prediction) {
-		histtimer_cancel();
-		clusttimer_cancel();
-	}
-	if (cpu->bias) {
-                if (!idx)
-			biastimer_cancel();
-		cpu->bias = 0;
-	}
-	local_irq_enable();
-	return idx;
-	}
+
+	return success ? idx : 0;
 }
 
 static void lpm_cpuidle_s2idle(struct cpuidle_device *dev,
