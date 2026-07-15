@@ -453,13 +453,24 @@ static inline bool __pushable_less(struct rb_node *a, const struct rb_node *b)
  */
 static void enqueue_pushable_dl_task(struct rq *rq, struct task_struct *p)
 {
-	struct rb_node *leftmost;
+	struct rb_root_cached *root = &rq->dl.pushable_dl_tasks_root;
+	struct rb_node **link = &root->rb_root.rb_node;
+	struct rb_node *parent = NULL;
+	bool leftmost = true;
 
 	BUG_ON(!RB_EMPTY_NODE(&p->pushable_dl_tasks));
 
-	leftmost = rb_add_cached(&p->pushable_dl_tasks,
-				 &rq->dl.pushable_dl_tasks_root,
-				 __pushable_less);
+	while (*link) {
+		parent = *link;
+		if (__pushable_less(&p->pushable_dl_tasks, parent))
+			link = &parent->rb_left;
+		else {
+			link = &parent->rb_right;
+			leftmost = false;
+		}
+	}
+	rb_link_node(&p->pushable_dl_tasks, parent, link);
+	rb_insert_color_cached(&p->pushable_dl_tasks, root, leftmost);
 	if (leftmost)
 		rq->dl.earliest_dl.next = p->dl.deadline;
 }
@@ -473,7 +484,8 @@ static void dequeue_pushable_dl_task(struct rq *rq, struct task_struct *p)
 	if (RB_EMPTY_NODE(&p->pushable_dl_tasks))
 		return;
 
-	leftmost = rb_erase_cached(&p->pushable_dl_tasks, root);
+	rb_erase_cached(&p->pushable_dl_tasks, root);
+	leftmost = rb_first_cached(root);
 	if (leftmost)
 		dl_rq->earliest_dl.next = __node_2_pdl(leftmost)->dl.deadline;
 
@@ -1396,10 +1408,24 @@ static inline bool __dl_less(struct rb_node *a, const struct rb_node *b)
 static void __enqueue_dl_entity(struct sched_dl_entity *dl_se)
 {
 	struct dl_rq *dl_rq = dl_rq_of_se(dl_se);
+	struct rb_root_cached *root = &dl_rq->root;
+	struct rb_node **link = &root->rb_root.rb_node;
+	struct rb_node *parent = NULL;
+	bool leftmost = true;
 
 	BUG_ON(!RB_EMPTY_NODE(&dl_se->rb_node));
 
-	rb_add_cached(&dl_se->rb_node, &dl_rq->root, __dl_less);
+	while (*link) {
+		parent = *link;
+		if (__dl_less(&dl_se->rb_node, parent))
+			link = &parent->rb_left;
+		else {
+			link = &parent->rb_right;
+			leftmost = false;
+		}
+	}
+	rb_link_node(&dl_se->rb_node, parent, link);
+	rb_insert_color_cached(&dl_se->rb_node, root, leftmost);
 
 	inc_dl_tasks(dl_se, dl_rq);
 }
