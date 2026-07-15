@@ -75,7 +75,7 @@ static int membarrier_private_expedited(void)
 		if (cpu == raw_smp_processor_id())
 			continue;
 		rcu_read_lock();
-		p = rcu_dereference(cpu_rq(cpu)->curr);
+		p = task_rcu_dereference(&cpu_rq(cpu)->curr);
 		if (p && p->mm == current->mm) {
 			if (!fallback)
 				__cpumask_set_cpu(cpu, tmpmask);
@@ -102,7 +102,7 @@ static int membarrier_private_expedited(void)
 	return 0;
 }
 
-static void membarrier_register_private_expedited(void)
+static int membarrier_register_private_expedited(void)
 {
 	struct task_struct *p = current;
 	struct mm_struct *mm = p->mm;
@@ -114,7 +114,7 @@ static void membarrier_register_private_expedited(void)
 	 */
 	if (atomic_read(&mm->membarrier_state)
 			& MEMBARRIER_STATE_PRIVATE_EXPEDITED_READY)
-		return;
+		return 0;
 	atomic_or(MEMBARRIER_STATE_PRIVATE_EXPEDITED_READY,
 			&mm->membarrier_state);
 }
@@ -164,13 +164,12 @@ SYSCALL_DEFINE2(membarrier, int, cmd, int, flags)
 		if (tick_nohz_full_enabled())
 			return -EINVAL;
 		if (num_online_cpus() > 1)
-			synchronize_rcu();
+			synchronize_sched();
 		return 0;
 	case MEMBARRIER_CMD_PRIVATE_EXPEDITED:
 		return membarrier_private_expedited();
 	case MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED:
-		membarrier_register_private_expedited();
-		return 0;
+		return membarrier_register_private_expedited();
 	default:
 		return -EINVAL;
 	}

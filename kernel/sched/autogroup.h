@@ -3,9 +3,9 @@
 
 struct autogroup {
 	/*
-	 * reference doesn't mean how many thread attach to this
-	 * autogroup now. It just stands for the number of task
-	 * could use this autogroup.
+	 * Reference doesn't mean how many threads attach to this
+	 * autogroup now. It just stands for the number of tasks
+	 * which could use this autogroup.
 	 */
 	struct kref		kref;
 	struct task_group	*tg;
