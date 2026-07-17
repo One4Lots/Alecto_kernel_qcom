@@ -3,16 +3,11 @@
  * Frame Aware Scaling (FAS)
  * Copyright (c) 2026, deutereum <fawwazzuladhim700@gmail.com>.
  *
- * FAS is a short-term CPU frequency booster derived from the
- * original cpu-boost driver. It reacts to two signals that correlate
- * with an incoming frame needing to be produced quickly:
+ * FAS is a short-term CPU frequency booster that act as a schedutil helper
+ * to react with sudden frame changes.
  *
- *  - touch input events (finger down / key press)
- *  - KGSL cmdbatch retirement (a GPU frame just finished, another is
- *    likely queued right behind it)
- *
- * Aware with the panel's current refresh rate so we don't
- * waste power boosting for low refresh rates.
+ * FAS is aware with the panel's current refresh rate so it won't
+ * waste power boosting on low refresh rates.
  */
 
 #define pr_fmt(fmt) "fas: " fmt
@@ -32,7 +27,11 @@ struct fas_cpu_sync {
 	unsigned int boost_min;
 };
 
-/* How long a boost floor is held before being released, in ms. */
+/*
+ * How long a boost floor is held before being released, in ms.
+ * fas need significantly lower window than cib or generic cpu-boost, since
+ * the boost is maintained well by kgsl
+ */
 static unsigned int fas_boost_ms = 50;
 
 static DEFINE_PER_CPU(struct fas_cpu_sync, fas_sync_info);
@@ -94,11 +93,6 @@ static void fas_do_boost(struct work_struct *work)
 	unsigned int fps = dsi_panel_get_refresh_rate();
 	unsigned int i;
 
-	/*
-	 * Already boosted at this refresh rate — just extend the window.
-	 * Avoids redundant frequency updates on every cmdbatch retirement
-	 * while still keeping the boost alive during continuous frame renders.
-	 */
 	if (fps == fas_active_fps) {
 		mod_delayed_work(fas_wq, &fas_boost_rem,
 				 msecs_to_jiffies(fas_boost_ms));
@@ -213,15 +207,7 @@ static struct input_handler fas_input_handler = {
 	.id_table	= fas_ids,
 };
 
-/*
- * Called from KGSL on every cmdbatch retirement. We no longer gate this
- * with fas_next_boost — the work_pending() guard in fas_queue_boost() is
- * sufficient to avoid flooding the workqueue, and fas_do_boost() handles
- * the steady-state case cheaply via mod_delayed_work(). Removing the
- * jiffies gate ensures the boost window is continuously extended during
- * rapid frame renders (e.g. scrolling at 120/130 Hz) without gaps.
- */
-void kgsl_cmdbatch_retired_hook(void)
+void fas_do_cmdbatch_boost(void)
 {
 	if (dsi_panel_get_refresh_rate() <= 30)
 		return;

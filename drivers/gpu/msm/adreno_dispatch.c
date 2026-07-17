@@ -2336,6 +2336,7 @@ static void cmdobj_profile_ticks(struct adreno_device *adreno_dev,
 	*retire = entry->retired;
 }
 
+void __weak fas_do_cmdbatch_boost(void) { }
 static void retire_cmdobj(struct adreno_device *adreno_dev,
 		struct kgsl_drawobj_cmd *cmdobj)
 {
@@ -2367,7 +2368,7 @@ static void retire_cmdobj(struct adreno_device *adreno_dev,
 			ADRENO_DRAWOBJ_RB(drawobj),
 			adreno_get_rptr(drawctxt->rb), cmdobj->fault_recovery);
 	}
-	kgsl_cmdbatch_retired_hook();
+	fas_do_cmdbatch_boost();
 
 	kgsl_drawobj_destroy(drawobj);
 }
