@@ -1269,8 +1269,6 @@ static bool psci_enter_sleep(struct lpm_cpu *cpu, int idx, bool from_idle)
 static int lpm_cpuidle_select(struct cpuidle_driver *drv,
 		struct cpuidle_device *dev, bool *stop_tick)
 {
-	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
-	int idx;
 #ifdef CONFIG_NO_HZ_COMMON
 	{
 		ktime_t delta_next;
@@ -1278,19 +1276,9 @@ static int lpm_cpuidle_select(struct cpuidle_driver *drv,
 
 	if (duration_ns <= TICK_NSEC)
 		*stop_tick = false;
-#else
-	s64 duration_ns = KTIME_MAX;
 #endif
 
-	for (idx = cpu->nlevels - 1; idx > 0; idx--) {
-		if (!lpm_cpu_mode_allow(dev->cpu, idx, true))
-			continue;
-		if ((s64)cpu->levels[idx].pwr.min_residency * NSEC_PER_USEC <=
-				duration_ns)
-			break;
-	}
-
-	return idx;
+	return 0;
 }
 
 void update_ipi_history(int cpu)
@@ -1344,26 +1332,8 @@ static void update_history(struct cpuidle_device *dev, int idx)
 static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 		struct cpuidle_driver *drv, int idx)
 {
-	struct lpm_cpu *cpu = per_cpu(cpu_lpm, dev->cpu);
-	const struct cpumask *cpumask = get_cpu_mask(dev->cpu);
-	bool success;
-	int ret;
-
-	if (idx == 0) {
-		wfi();
-		return idx;
-	}
-
-	cpu_prepare(cpu, idx, true);
-	cluster_prepare(cpu->parent, cpumask, idx, true, 0);
-
-	ret = psci_enter_sleep(cpu, idx, true);
-	success = (ret == 0);
-
-	cluster_unprepare(cpu->parent, cpumask, idx, true, 0, success);
-	cpu_unprepare(cpu, idx, true);
-
-	return success ? idx : 0;
+	wfi();
+	return idx;
 }
 
 static void lpm_cpuidle_s2idle(struct cpuidle_device *dev,
