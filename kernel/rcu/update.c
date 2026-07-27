@@ -67,9 +67,9 @@
 #endif
 
 #ifndef CONFIG_TINY_RCU
-int rcu_expedited;
+extern int rcu_expedited;
 module_param(rcu_expedited, int, 0);
-int rcu_normal;
+extern int rcu_normal;
 module_param(rcu_normal, int, 0);
 static int rcu_normal_after_boot;
 module_param(rcu_normal_after_boot, int, 0);
