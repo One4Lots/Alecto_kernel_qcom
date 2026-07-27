@@ -14,8 +14,6 @@
 #include "sched.h"
 
 #define IOWAIT_BOOST_MIN	(SCHED_CAPACITY_SCALE / 8)
-#define SUGOV_DVFS_HEADROOM_FACTOR_LITTLE 1280
-#define SUGOV_DVFS_HEADROOM_FACTOR_BIG    1126
 
 struct sugov_tunables {
 	struct gov_attr_set	attr_set;
@@ -46,7 +44,6 @@ struct sugov_policy {
 	bool			need_freq_update;
 
 	unsigned long		dvfs_capacity;
-	unsigned int		dvfs_headroom_factor;
 	u16			dvfs_headroom_lut[SCHED_CAPACITY_SCALE + 1];
 };
 
@@ -226,37 +223,20 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 	return l_freq;
 }
 
-static inline unsigned int sugov_dvfs_headroom_factor(unsigned int cpu)
-{
-	/* CPUs 0-5 belong to the Little cluster */
-	if (cpu <= 5)
-		return SUGOV_DVFS_HEADROOM_FACTOR_LITTLE;
-
-	/* CPUs 6 and 7 belong to the Big cluster */
-	return SUGOV_DVFS_HEADROOM_FACTOR_BIG;
-}
-
 static inline unsigned long sugov_apply_dvfs_headroom(unsigned long util,
 						      unsigned long capacity,
-						      unsigned headroom_factor)
+						      unsigned long threshold)
 {
-	unsigned long headroom;
+	unsigned long delta, headroom;
+	unsigned long capped_util = min(util, capacity);
+	unsigned long delta_t = (capacity * 220) >> 10;
 
-	if (util >= capacity)
-		return util;
+	delta = capacity - capped_util;
 
-	/*
-	 * Taper the boosting at the top end as these are expensive and
-	 * we don't need that much of a big headroom as we approach max
-	 * capacity.
-	 */
-	headroom = capacity - util;
+	headroom = min((delta_t * capped_util) / threshold,
+			(delta_t * delta) / (capacity - threshold));
 
-	/* formula: headroom * (1.X - 1) == headroom * 0.X */
-	headroom = (headroom * (headroom_factor - SCHED_CAPACITY_SCALE)) >>
-		   SCHED_CAPACITY_SHIFT;
-
-	return util + headroom;
+	return capped_util + headroom;
 }
 
 
@@ -655,19 +635,19 @@ static void sugov_build_dvfs_headroom_lut(struct sugov_policy *sg_policy)
 {
 	struct cpufreq_policy *policy = sg_policy->policy;
 	unsigned long capacity = capacity_orig_of(policy->cpu);
-	unsigned int headroom_factor = sugov_dvfs_headroom_factor(policy->cpu);
+	unsigned long threshold;
 	unsigned long util;
 
-	if (sg_policy->dvfs_capacity == capacity &&
-	    sg_policy->dvfs_headroom_factor == headroom_factor)
+	if (sg_policy->dvfs_capacity == capacity)
 		return;
 
 	sg_policy->dvfs_capacity = capacity;
-	sg_policy->dvfs_headroom_factor = headroom_factor;
+
+	threshold = (capacity * 15) / 100;
 
 	for (util = 0; util <= SCHED_CAPACITY_SCALE; util++)
 		sg_policy->dvfs_headroom_lut[util] =
-			sugov_apply_dvfs_headroom(util, capacity, headroom_factor);
+			sugov_apply_dvfs_headroom(util, capacity, threshold);
 }
 
 static struct sugov_policy *sugov_policy_alloc(struct cpufreq_policy *policy)
