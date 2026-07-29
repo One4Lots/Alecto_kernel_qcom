@@ -569,6 +569,8 @@ static asmlinkage void __exception_irq_entry gic_handle_irq(struct pt_regs *regs
 				isb();
 
 			err = handle_domain_irq(gic_data.domain, irqnr, regs);
+			if (WARN_ON_ONCE(!irqs_disabled()))
+				pr_warn("GIC: IRQ %u handler left IRQs enabled\n", irqnr);
 			if (err) {
 				WARN_ONCE(true, "Unexpected interrupt received!\n");
 				log_abnormal_wakeup_reason(
