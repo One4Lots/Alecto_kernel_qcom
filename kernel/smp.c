@@ -156,23 +156,6 @@ void __smp_call_single_queue(int cpu, struct llist_node *node)
 		send_call_function_single_ipi(cpu);
 }
 
-void __smp_call_single_queue(int cpu, struct llist_node *node)
-{
-	/*
-	 * The list addition should be visible before sending the IPI
-	 * handler locks the list to pull the entry off it because of
-	 * normal cache coherency rules implied by spinlocks.
-	 *
-	 * If IPIs can go out of order to the cache coherency protocol
-	 * in an architecture, sufficient synchronisation should be added
-	 * to arch code to make it appear to obey cache coherency WRT
-	 * locking and barrier primitives. Generic code isn't really
-	 * equipped to do the right thing...
-	 */
-	if (llist_add(node, &per_cpu(call_single_queue, cpu)))
-		send_call_function_single_ipi(cpu);
-}
-
 /*
  * Insert a previously allocated call_single_data_t element
  * for execution on the given CPU. data must already have
@@ -215,17 +198,8 @@ static int generic_exec_single(int cpu, struct __call_single_data *csd)
 void generic_smp_call_function_single_interrupt(void)
 {
 	flush_smp_call_function_queue(true);
-
-	/*
-	 * Handle irq works queued remotely by irq_work_queue_on().
-	 * Smp functions above are typically synchronous so they
-	 * better run first since some other CPUs may be busy waiting
-	 * for them.
-	 */
-	irq_work_run();
 }
 
-extern void sched_ttwu_pending(void *);
 extern void irq_work_single(void *);
 
 /**
@@ -950,7 +924,6 @@ int smp_call_on_cpu(unsigned int cpu, int (*func)(void *), void *par, bool phys)
 
 	queue_work_on(cpu, system_wq, &sscs.work);
 	wait_for_completion(&sscs.done);
-	destroy_work_on_stack(&sscs.work);
 
 	return sscs.ret;
 }
