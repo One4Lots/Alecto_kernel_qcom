@@ -723,7 +723,7 @@ static int osm_em_active_power(unsigned long *power, unsigned long *freq, int cp
 	table = osm_em_get_table(cpu, &size);
 
 	for (i = 0; i < size; i++) {
-		if (table[i].freq_khz >= freq_khz) {
+		if (table[i].freq_khz > freq_khz) {
 			*freq  = (unsigned long)table[i].freq_khz * 1000;
 			*power = table[i].power_mw;
 			return 0;
