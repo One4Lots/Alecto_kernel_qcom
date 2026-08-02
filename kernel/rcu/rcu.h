@@ -24,27 +24,10 @@
 #define instrumentation_begin() do { } while (0)
 #define instrumentation_end() do { } while (0)
 
-#ifndef IRQ_WORK_HARD_IRQ
-#define IRQ_WORK_HARD_IRQ	0
-#endif
-
 #ifdef CONFIG_NO_HZ_FULL
 #define rcu_irq_enter_check_tick	__rcu_irq_enter_check_tick
 #else
 #define rcu_irq_enter_check_tick()	do { } while (0)
-#endif
-
-#ifndef HK_FLAG_RCU
-#define HK_FLAG_RCU		1
-#endif
-#ifndef housekeeping_affine
-#define housekeeping_affine(a, b)	do { } while (0)
-#endif
-#ifndef housekeeping_test_cpu
-#define housekeeping_test_cpu(a, b)	1
-#endif
-#ifndef housekeeping_any_cpu
-#define housekeeping_any_cpu(a)		smp_processor_id()
 #endif
 
 /* Offset to allow distinguishing irq vs. task-based idle entry/exit. */
