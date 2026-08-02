@@ -407,8 +407,11 @@ static inline void tick_irq_exit(void)
  */
 void irq_exit(void)
 {
-	if (WARN_ON_ONCE(!irqs_disabled()))
-		local_irq_disable();
+#ifndef __ARCH_IRQ_EXIT_IRQS_DISABLED
+	local_irq_disable();
+#else
+	lockdep_assert_irqs_disabled();
+#endif
 	account_irq_exit_time(current);
 	preempt_count_sub(HARDIRQ_OFFSET);
 	if (!in_interrupt() && local_softirq_pending())
