@@ -28,10 +28,6 @@
 #define IRQ_WORK_HARD_IRQ	0
 #endif
 
-#ifndef swake_up_one
-#define swake_up_one(wq)	swake_up_all(wq)
-#endif
-
 #ifdef CONFIG_NO_HZ_FULL
 #define rcu_irq_enter_check_tick	__rcu_irq_enter_check_tick
 #else
