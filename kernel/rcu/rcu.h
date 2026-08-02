@@ -24,12 +24,6 @@
 #define instrumentation_begin() do { } while (0)
 #define instrumentation_end() do { } while (0)
 
-#ifdef CONFIG_NO_HZ_FULL
-#define rcu_irq_enter_check_tick	__rcu_irq_enter_check_tick
-#else
-#define rcu_irq_enter_check_tick()	do { } while (0)
-#endif
-
 /* Offset to allow distinguishing irq vs. task-based idle entry/exit. */
 #define DYNTICK_IRQ_NONIDLE	((LONG_MAX / 2) + 1)
 
