@@ -3228,30 +3228,6 @@ void hdd_wlan_list_fw_profile(uint16_t *length,
 	*length = len + 1;
 }
 
-#define HDD_DUMP_STAT_HELP(STAT_ID) \
-	hdd_nofl_info("%u -- %s", STAT_ID, (# STAT_ID))
-/**
- * hdd_display_stats_help() - print statistics help
- *
- * Return: none
- */
-static void hdd_display_stats_help(void)
-{
-	hdd_nofl_info("iwpriv wlan0 dumpStats [option] - dump statistics");
-	hdd_nofl_info("iwpriv wlan0 clearStats [option] - clear statistics");
-	hdd_nofl_info("options:");
-	HDD_DUMP_STAT_HELP(CDP_TXRX_PATH_STATS);
-	HDD_DUMP_STAT_HELP(CDP_TXRX_HIST_STATS);
-	HDD_DUMP_STAT_HELP(CDP_TXRX_TSO_STATS);
-	HDD_DUMP_STAT_HELP(CDP_HDD_NETIF_OPER_HISTORY);
-	HDD_DUMP_STAT_HELP(CDP_DUMP_TX_FLOW_POOL_INFO);
-	HDD_DUMP_STAT_HELP(CDP_TXRX_DESC_STATS);
-	HDD_DUMP_STAT_HELP(CDP_HIF_STATS);
-	HDD_DUMP_STAT_HELP(CDP_NAPI_STATS);
-	HDD_DUMP_STAT_HELP(CDP_DP_NAPI_STATS);
-	HDD_DUMP_STAT_HELP(CDP_DP_RX_THREAD_STATS);
-}
-
 /**
  * hdd_wlan_dump_stats() - display dump Stats
  * @adapter: adapter handle
