@@ -132,3 +132,9 @@ Android.bp
 
 # Object directory
 out/
+
+# Ignore build stuff
+AnyKernel3/
+build.sh
+log.txt
+neutron-clang/
