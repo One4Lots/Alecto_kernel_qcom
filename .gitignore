@@ -137,4 +137,4 @@ out/
 AnyKernel3/
 build.sh
 log.txt
-neutron-clang/
+clang/
