@@ -5325,6 +5325,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 {
 	struct cfs_rq *cfs_rq;
 	struct sched_entity *se = &p->se;
+	int idle_h_nr_running = idle_policy(p->policy);
 	int task_new = !(flags & ENQUEUE_WAKEUP);
 
 #ifdef CONFIG_SCHED_WALT
@@ -7314,13 +7315,13 @@ static inline int __select_idle_sibling(struct task_struct *p, int prev, int tar
 	struct sched_domain *sd;
 	int i;
 
-	if (idle_cpu(target) && !cpu_isolated(target)) || sched_idle_cpu(target))
+	if ((idle_cpu(target) && !cpu_isolated(target)) || sched_idle_cpu(target))
 		return target;
 
 	/*
 	 * If the previous cpu is cache affine and idle, don't be stupid.
 	 */
-	if (prev != target && cpus_share_cache(prev, target) &&
+	if ((prev != target && cpus_share_cache(prev, target) &&
 				idle_cpu(prev) && !cpu_isolated(prev)) || sched_idle_cpu(prev))
 		return prev;
 
@@ -7900,7 +7901,9 @@ static inline int find_best_target(struct task_struct *p, int *backup_cpu,
 		if (!prefer_idle && !boosted &&
 			(target_cpu != -1 || best_idle_cpu != -1) &&
 			(fbt_env->placement_boost == SCHED_BOOST_NONE ||
+#ifdef CONFIG_SCHED_WALT
 			sched_boost() != FULL_THROTTLE_BOOST ||
+#endif
 			(fbt_env->placement_boost == SCHED_BOOST_ON_BIG &&
 				!next_group_higher_cap)))
 			break;
