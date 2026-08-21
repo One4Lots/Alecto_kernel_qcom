@@ -216,7 +216,7 @@ static int sched_energy_probe(struct platform_device *pdev)
 	for_each_possible_cpu(cpu) {
 		unsigned long cpu_max_cap;
 		struct sched_group_energy *sge_l0, *sge;
-		cpu_max_cap = topology_get_cpu_scale(NULL, cpu);
+		cpu_max_cap = topology_get_cpu_scale(cpu);
 
 		/*
 		 * All the cap_states have same frequency table so use
