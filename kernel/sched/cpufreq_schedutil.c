@@ -20,6 +20,7 @@
 #include "sched.h"
 #include "pelt.h"
 
+#include "schedutil_lut.h"
 #define SUGOV_KTHREAD_PRIORITY	50
 
 struct sugov_tunables {
@@ -126,6 +127,16 @@ static void sugov_deferred_update(struct sugov_policy *sg_policy)
 	}
 }
 
+static unsigned int sugov_get_lut_freq(unsigned int cpu, unsigned long util)
+{
+	if (cpu >= 6)
+		return sugov_lut_lookup(sugov_lut_gold,
+					SUGOV_LUT_SIZE(sugov_lut_gold), util);
+	else
+		return sugov_lut_lookup(sugov_lut_silver,
+					SUGOV_LUT_SIZE(sugov_lut_silver), util);
+}
+
 /**
  * get_next_freq - Compute a new frequency for a given cpufreq policy.
  * @sg_policy: schedutil policy object to compute the new frequency for.
@@ -152,39 +163,25 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 				  unsigned long util, unsigned long max)
 {
 	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned int freq, idx, l_freq, h_freq;
+	unsigned int freq, idx, l_freq, h_freq, result;
+	unsigned int cpu = cpumask_first(policy->related_cpus);
 
-	if (arch_scale_freq_invariant())
-		freq = policy->cpuinfo.max_freq;
-	else
-		/*
-		 * Apply a 25% margin so that we select a higher frequency than
-		 * the current one before the CPU is fully busy:
-		 */
-		freq = policy->cur + (policy->cur >> 2);
-
-	freq = freq * util / max;
+	freq = sugov_get_lut_freq(cpu, util);
 	trace_sugov_next_freq(policy->cpu, util, max, freq);
-
-	if (freq == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)
-		return sg_policy->next_freq;
-
 	sg_policy->cached_raw_freq = freq;
 	l_freq = cpufreq_driver_resolve_freq(policy, freq);
 	idx = cpufreq_frequency_table_target(policy, freq, CPUFREQ_RELATION_H);
 	h_freq = policy->freq_table[idx].frequency;
 	h_freq = clamp(h_freq, policy->min, policy->max);
+
 	if (l_freq <= h_freq || l_freq == policy->min)
-		return l_freq;
+		result = l_freq;
+	else if (mult_frac(100, freq - h_freq, l_freq - h_freq) < 20)
+		result = h_freq;
+	else
+		result = l_freq;
 
-	/*
-	 * Use the frequency step below if the calculated frequency is <20%
-	 * higher than it.
-	 */
-	if (mult_frac(100, freq - h_freq, l_freq - h_freq) < 20)
-		return h_freq;
-
-	return l_freq;
+	return result;
 }
 
 static inline unsigned long sugov_apply_dvfs_headroom(unsigned long util,
@@ -221,15 +218,17 @@ static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu)
 	struct rq *rq = cpu_rq(cpu);
 	unsigned long cfs_max = arch_scale_cpu_capacity(NULL, cpu);
 	unsigned long util_cfs = READ_ONCE(rq->cfs.avg.util_avg);
+	unsigned long util_raw;
 
 	if (sched_feat(UTIL_EST))
 		util_cfs = max_t(unsigned long, util_cfs,
 				 READ_ONCE(rq->cfs.avg.util_est.enqueued) & ~UTIL_AVG_UNCHANGED);
 
-	/* Add RT and DL utilization, matching effective_cpu_util() */
-	*util = util_cfs + cpu_util_rt(cpu) + cpu_util_dl(rq);
-	*util = apply_dvfs_headroom(min(*util, cfs_max), cpu);
-	*max = cfs_max;
+	util_raw = util_cfs + cpu_util_rt(cpu) + cpu_util_dl(rq);
+	util_raw = min(util_raw, cfs_max);
+
+	*util = apply_dvfs_headroom(util_raw, cpu);
+	*max  = cfs_max;
 }
 
 static void sugov_set_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
