@@ -36,7 +36,6 @@
 #include "sde_dbg.h"
 #include "dsi_parser.h"
 #include "dsi_phy.h"
-#include <linux/cpu-boost.h>
 
 #define to_dsi_display(x) container_of(x, struct dsi_display, host)
 #define INT_BASE_10 10
@@ -65,6 +64,7 @@ static const struct of_device_id dsi_display_dt_match[] = {
 };
 
 struct dsi_display *primary_display;
+static unsigned int cur_refresh_rate = 60;
 
 static void dsi_display_mask_ctrl_error_interrupts(struct dsi_display *display,
 			u32 mask, bool enable)
@@ -4386,7 +4386,7 @@ static int dsi_display_dfps_update(struct dsi_display *display,
 	 * active mode.
 	 */
 	panel_mode->dsi_mode_flags = 0;
-	cpu_boost_set_refresh_rate(timing->refresh_rate);
+	WRITE_ONCE(cur_refresh_rate, timing->refresh_rate);
 
 error:
 	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);

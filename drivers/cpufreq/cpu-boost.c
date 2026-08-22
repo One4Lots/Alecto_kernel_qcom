@@ -22,6 +22,7 @@
 #include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/time.h>
+#include <drm/drm_refresh_rate.h>
 
 struct cpu_sync {
 	int cpu;
@@ -33,8 +34,6 @@ static DEFINE_PER_CPU(struct cpu_sync, sync_info);
 static struct workqueue_struct *cpu_boost_wq;
 
 static struct work_struct input_boost_work;
-
-static bool input_boost_enabled;
 
 static unsigned int input_boost_ms = 40;
 
@@ -88,7 +87,6 @@ check_enable:
 			break;
 		}
 	}
-	input_boost_enabled = enabled;
 
 	return 0;
 }
@@ -184,32 +182,9 @@ static void do_input_boost_rem(struct work_struct *work)
 	}
 }
 
-void cpu_boost_set_refresh_rate(unsigned int fps)
-{
-	int cpu;
-	struct cpu_sync *s;
-
-	for_each_possible_cpu(cpu) {
-		s = &per_cpu(sync_info, cpu);
-		if (fps <= 60) {
-			s->input_boost_freq = 0;
-			input_boost_ms = 0;
-		} else if (fps < 90) {
-			s->input_boost_freq = (cpu <= 3) ? 1401600 :
-					      (cpu <= 6) ? 748800 : 0;
-			input_boost_ms = 200;
-		} else {
-			s->input_boost_freq = (cpu <= 3) ? 1708800 :
-					      (cpu <= 6) ? 940800 : 0;
-			input_boost_ms = 300;
-		}
-	}
-	input_boost_enabled = (fps > 60);
-}
-EXPORT_SYMBOL(cpu_boost_set_refresh_rate);
-
 static void do_input_boost(struct work_struct *work)
 {
+	unsigned int fps = dsi_panel_get_refresh_rate();
 	unsigned int i, ret;
 	struct cpu_sync *i_sync_info;
 
@@ -219,11 +194,17 @@ static void do_input_boost(struct work_struct *work)
 		sched_boost_active = false;
 	}
 
-	/* Set the input_boost_min for all CPUs in the system */
+	/* Set the input_boost_min for all CPUs based on current refresh rate */
 	pr_debug("Setting input boost min for all CPUs\n");
 	for_each_possible_cpu(i) {
 		i_sync_info = &per_cpu(sync_info, i);
-		i_sync_info->input_boost_min = i_sync_info->input_boost_freq;
+		if (fps <= 30) {
+			i_sync_info->input_boost_min = (i <= 5) ? 768000 :   /* Little cluster (CPUs 0-5) */
+						       (i <= 7) ? 825600 : 0;  /* Big cluster (CPUs 6-7) */
+		}else {
+			i_sync_info->input_boost_min = (i <= 5) ? 1324800 :  /* Little cluster (CPUs 0-5) */
+						       (i <= 7) ? 1708800 : 0; /* Big cluster (CPUs 6-7) */
+		}
 	}
 
 	/* Update policies for all online CPUs */
@@ -239,16 +220,13 @@ static void do_input_boost(struct work_struct *work)
 	}
 
 	queue_delayed_work(cpu_boost_wq, &input_boost_rem,
-					msecs_to_jiffies(input_boost_ms));
+				msecs_to_jiffies(input_boost_ms));
 }
 
 static void cpuboost_input_event(struct input_handle *handle,
 		unsigned int type, unsigned int code, int value)
 {
 	u64 now;
-
-	if (!input_boost_enabled)
-		return;
 
 	now = ktime_to_us(ktime_get());
 	if (now - last_input_time < MIN_INPUT_INTERVAL)
@@ -334,32 +312,33 @@ static struct input_handler cpuboost_input_handler = {
 
 static int cpu_boost_init(void)
 {
-	int cpu, ret;
-	struct cpu_sync *s;
+        int cpu, ret;
+        struct cpu_sync *s;
 
-	cpu_boost_wq = alloc_workqueue("cpuboost_wq", WQ_HIGHPRI, 0);
-	if (!cpu_boost_wq)
-		return -EFAULT;
+        cpu_boost_wq = alloc_workqueue("cpuboost_wq", WQ_HIGHPRI, 0);
+        if (!cpu_boost_wq)
+                return -EFAULT;
 
-	INIT_WORK(&input_boost_work, do_input_boost);
-	INIT_DELAYED_WORK(&input_boost_rem, do_input_boost_rem);
+        INIT_WORK(&input_boost_work, do_input_boost);
+        INIT_DELAYED_WORK(&input_boost_rem, do_input_boost_rem);
 
-	for_each_possible_cpu(cpu) {
-		s = &per_cpu(sync_info, cpu);
-		s->cpu = cpu;
-		if (cpu <= 3)
-			s->input_boost_freq = 1708800;
-		else if (cpu <= 6)
-			s->input_boost_freq = 940800;
-		else
-			s->input_boost_freq = 0;
-	}
-	input_boost_enabled = true;
-	input_boost_ms = 300;
+        for_each_possible_cpu(cpu) {
+                s = &per_cpu(sync_info, cpu);
+                s->cpu = cpu;
+                /* Map default boost to the 6-core Little cluster */
+                if (cpu <= 5)
+                        s->input_boost_freq = 1324800;
+                /* Map default boost to the 2-core Big cluster */
+                else if (cpu <= 7)
+                        s->input_boost_freq = 1708800;
+                else
+                        s->input_boost_freq = 0;
+        }
+        input_boost_ms = 300;
 
-	cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
+        cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
 
-	ret = input_register_handler(&cpuboost_input_handler);
-	return 0;
+        ret = input_register_handler(&cpuboost_input_handler);
+        return 0;
 }
 late_initcall(cpu_boost_init);
