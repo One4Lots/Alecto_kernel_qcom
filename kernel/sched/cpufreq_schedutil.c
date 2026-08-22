@@ -124,7 +124,7 @@ static void sugov_deferred_update(struct sugov_policy *sg_policy)
 
 static unsigned int sugov_get_lut_freq(unsigned int cpu, unsigned long util)
 {
-	unsigned long cap = arch_scale_cpu_capacity(cpu);
+	unsigned long cap = capacity_orig_of(cpu);
 	unsigned int util_pct = cap ? (unsigned int)(util * 100 / cap) : 0;
 	util_pct = min(util_pct, 100U);
 
