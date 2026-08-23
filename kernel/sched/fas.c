@@ -114,8 +114,7 @@ static void fas_do_boost(struct work_struct *work)
 		if (fps <= 30) {
 			s->boost_min = (i <= 5) ? 768000 : 0;
 		} else {
-			s->boost_min = (i <= 5) ? 1324800 :
-				       (i <= 7) ? 825600 : 0;
+			s->boost_min = (i <= 5) ? 1324800 : 0;
 		}
 	}
 
