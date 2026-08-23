@@ -112,11 +112,9 @@ static void fas_do_boost(struct work_struct *work)
 	for_each_possible_cpu(i) {
                 struct fas_cpu_sync *s = &per_cpu(fas_sync_info, i);
 		if (fps <= 30) {
-			s->boost_min = (i <= 5) ? 768000 :9
-				       (i <= 7) ? 825600 : 0;
+			s->boost_min = (i <= 5) ? 768000 : 0;
 		} else {
-			s->boost_min = (i <= 5) ? 1324800 :
-				       (i <= 7) ? 1708800 : 0;
+			s->boost_min = (i <= 5) ? 1324800 : 0;
 		}
 	}
 
