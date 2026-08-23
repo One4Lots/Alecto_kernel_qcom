@@ -28,18 +28,24 @@ struct fas_cpu_sync {
 };
 
 /*
- * How long a boost floor is held before being released, in ms.
- * fas need significantly lower window than cib or generic cpu-boost, since
- * the boost is maintained well by kgsl
+ * Fixed boost window for input events, in ms.
  */
-static unsigned int fas_boost_ms = 50;
+static unsigned int fas_input_boost_ms = 50;
+
+#define FAS_ADAPTIVE_MULT    14
+#define FAS_ADAPTIVE_MIN_MS  50
+#define FAS_ADAPTIVE_MAX_MS  200
 
 static DEFINE_PER_CPU(struct fas_cpu_sync, fas_sync_info);
 static struct workqueue_struct *fas_wq;
-static struct work_struct fas_boost_work;
-static struct delayed_work fas_boost_rem;
+static struct work_struct fas_input_boost_work;
+static struct delayed_work fas_input_boost_rem;
+
+static struct work_struct fas_cmdbatch_boost_work;
+static struct delayed_work fas_cmdbatch_boost_rem;
 
 static u64 fas_last_input_time;
+static u64 fas_last_cmdbatch_time;
 static unsigned int fas_active_fps;
 
 #define FAS_MIN_INPUT_INTERVAL (150 * USEC_PER_MSEC)
@@ -77,53 +83,108 @@ static inline void fas_update_policy_online(void)
 	put_online_cpus();
 }
 
-static void fas_do_boost_rem(struct work_struct *work)
+static void fas_set_boost_min(unsigned int fps)
+{
+	unsigned int i;
+
+	for_each_possible_cpu(i) {
+		struct fas_cpu_sync *s = &per_cpu(fas_sync_info, i);
+                if (fps <= 30) {
+                        s->boost_min = (i <= 5) ? 768000 : 0;
+                } else {
+                        s->boost_min = (i <= 5) ? 1324800 : 0;
+                }
+	}
+}
+
+static void fas_clear_boost_min(void)
 {
 	unsigned int i;
 
 	for_each_possible_cpu(i)
 		per_cpu(fas_sync_info, i).boost_min = 0;
+}
 
+static void fas_do_input_boost_rem(struct work_struct *work)
+{
+	if (delayed_work_pending(&fas_cmdbatch_boost_rem))
+		return;
+
+	fas_clear_boost_min();
 	fas_active_fps = 0;
 	fas_update_policy_online();
 }
 
-static void fas_do_boost(struct work_struct *work)
+static void fas_do_cmdbatch_boost_rem(struct work_struct *work)
 {
-	unsigned int fps = dsi_panel_get_refresh_rate();
-	unsigned int i;
-
-	if (fps == fas_active_fps) {
-		mod_delayed_work(fas_wq, &fas_boost_rem,
-				 msecs_to_jiffies(fas_boost_ms));
+	if (delayed_work_pending(&fas_input_boost_rem))
 		return;
-	}
 
-	fas_active_fps = fps;
-
-	cancel_delayed_work(&fas_boost_rem);
-
-	for_each_possible_cpu(i) {
-                struct fas_cpu_sync *s = &per_cpu(fas_sync_info, i);
-		if (fps <= 30) {
-			s->boost_min = (i <= 5) ? 768000 : 0;
-		} else {
-			s->boost_min = (i <= 5) ? 1324800 : 0;
-		}
-	}
-
+	fas_clear_boost_min();
+	fas_last_cmdbatch_time = 0;
+	fas_active_fps = 0;
 	fas_update_policy_online();
-
-	queue_delayed_work(fas_wq, &fas_boost_rem,
-			   msecs_to_jiffies(fas_boost_ms));
 }
 
-static inline void fas_queue_boost(void)
+static void fas_do_input_boost(struct work_struct *work)
 {
-	if (work_pending(&fas_boost_work))
+	unsigned int fps = dsi_panel_get_refresh_rate();
+
+	if (fps != fas_active_fps) {
+		fas_active_fps = fps;
+		cancel_delayed_work(&fas_input_boost_rem);
+		fas_set_boost_min(fps);
+		fas_update_policy_online();
+	}
+	mod_delayed_work(fas_wq, &fas_input_boost_rem,
+			 msecs_to_jiffies(fas_input_boost_ms));
+}
+
+static void fas_do_cmdbatch_boost_work_fn(struct work_struct *work)
+{
+	unsigned int fps = dsi_panel_get_refresh_rate();
+	u64 now = ktime_to_ms(ktime_get());
+	u64 interval;
+	unsigned int window_ms;
+
+	interval = fas_last_cmdbatch_time ?
+		   now - fas_last_cmdbatch_time : 0;
+	fas_last_cmdbatch_time = now;
+
+	if (interval > 0 && interval < FAS_ADAPTIVE_MAX_MS) {
+		window_ms = (unsigned int)(interval * FAS_ADAPTIVE_MULT / 10);
+		window_ms = clamp(window_ms,
+				  FAS_ADAPTIVE_MIN_MS,
+				  FAS_ADAPTIVE_MAX_MS);
+	} else {
+		window_ms = FAS_ADAPTIVE_MIN_MS;
+	}
+
+	if (fps != fas_active_fps) {
+		fas_active_fps = fps;
+		cancel_delayed_work(&fas_cmdbatch_boost_rem);
+		fas_set_boost_min(fps);
+		fas_update_policy_online();
+	}
+
+	mod_delayed_work(fas_wq, &fas_cmdbatch_boost_rem,
+			 msecs_to_jiffies(window_ms));
+}
+
+static inline void fas_queue_input_boost(void)
+{
+	if (work_pending(&fas_input_boost_work))
 		return;
 
-	queue_work(fas_wq, &fas_boost_work);
+	queue_work(fas_wq, &fas_input_boost_work);
+}
+
+static inline void fas_queue_cmdbatch_boost(void)
+{
+	if (work_pending(&fas_cmdbatch_boost_work))
+		return;
+
+	queue_work(fas_wq, &fas_cmdbatch_boost_work);
 }
 
 static void fas_input_event(struct input_handle *handle,
@@ -135,7 +196,7 @@ static void fas_input_event(struct input_handle *handle,
 		return;
 
 	fas_last_input_time = now;
-	fas_queue_boost();
+	fas_queue_input_boost();
 }
 
 static int fas_input_connect(struct input_handler *handler,
@@ -212,7 +273,7 @@ void fas_do_cmdbatch_boost(void)
 	if (dsi_panel_get_refresh_rate() <= 30)
 		return;
 
-	fas_queue_boost();
+	fas_queue_cmdbatch_boost();
 }
 
 static int fas_init(void)
@@ -221,8 +282,11 @@ static int fas_init(void)
 	if (!fas_wq)
 		return -EFAULT;
 
-	INIT_WORK(&fas_boost_work, fas_do_boost);
-	INIT_DELAYED_WORK(&fas_boost_rem, fas_do_boost_rem);
+	INIT_WORK(&fas_input_boost_work, fas_do_input_boost);
+	INIT_DELAYED_WORK(&fas_input_boost_rem, fas_do_input_boost_rem);
+
+	INIT_WORK(&fas_cmdbatch_boost_work, fas_do_cmdbatch_boost_work_fn);
+	INIT_DELAYED_WORK(&fas_cmdbatch_boost_rem, fas_do_cmdbatch_boost_rem);
 
 	cpufreq_register_notifier(&fas_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
 
