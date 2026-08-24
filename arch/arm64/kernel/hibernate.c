@@ -27,6 +27,7 @@
 #include <asm/barrier.h>
 #include <asm/cacheflush.h>
 #include <asm/cputype.h>
+#include <asm/daifflags.h>
 #include <asm/irqflags.h>
 #include <asm/kexec.h>
 #include <asm/memory.h>
@@ -294,7 +295,7 @@ int swsusp_arch_suspend(void)
 		return -EBUSY;
 	}
 
-	local_dbg_save(flags);
+	flags = local_daif_save();
 
 	if (__cpu_suspend_enter(&state)) {
 		/* make the crash dump kernel image visible/saveable */
@@ -338,7 +339,7 @@ int swsusp_arch_suspend(void)
 		}
 	}
 
-	local_dbg_restore(flags);
+	local_daif_restore(flags);
 	place_marker("PM: Kernel restore start!");
 
 	return ret;
