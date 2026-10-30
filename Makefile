@@ -377,9 +377,9 @@ else
 HOSTCC	= gcc
 HOSTCXX	= g++
 endif
-HOSTCFLAGS   := -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 \
+HOSTCFLAGS   := -Wall -Wmissing-prototypes -Wstrict-prototypes -O3 \
 		-fomit-frame-pointer -std=gnu89 $(HOST_LFS_CFLAGS)
-HOSTCXXFLAGS := -O2 $(HOST_LFS_CFLAGS)
+HOSTCXXFLAGS := -O3 $(HOST_LFS_CFLAGS)
 HOSTLDFLAGS  := $(HOST_LFS_LDFLAGS)
 HOST_LOADLIBES := $(HOST_LFS_LIBS)
 
@@ -732,6 +732,10 @@ endif
 LLVM_AR		:= llvm-ar
 LLVM_NM		:= llvm-nm
 export LLVM_AR LLVM_NM
+
+# Set O3 optimization level for LTO
+LDFLAGS		+= --plugin-opt=O3
+
 endif
 
 # The arch Makefile can set ARCH_{CPP,A,C}FLAGS to override the default
@@ -749,10 +753,53 @@ KBUILD_CFLAGS	+= $(call cc-disable-warning, int-in-bool-context)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, address-of-packed-member)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, attribute-alias)
 
+# ==============================================================================
+# 1. Universal Architecture & Hardware Extensions for Snapdragon 'miatoll'
+# ==============================================================================
+ifeq ($(cc-name),gcc)
+    KBUILD_CFLAGS += -march=armv8.2-a+crypto+fp16+dotprod+rcpc
+    KBUILD_CFLAGS += -mtune=cortex-a76.cortex-a55
+endif
+
+ifeq ($(cc-name),clang)
+    # Includes LSE (Atomics), RDM, CRC32, FP16, and DotProd hardware acceleration
+    KBUILD_CFLAGS += -mcpu=cortex-a76+crc+crypto
+    KBUILD_CFLAGS += -mtune=cortex-a76
+    KBUILD_CFLAGS += -march=armv8.2-a+crypto+fp16+lse+rdm+rcpc+dotprod
+
+    KBUILD_AFLAGS += -mcpu=cortex-a76+crc+crypto
+    KBUILD_AFLAGS += -mtune=cortex-a76
+    KBUILD_AFLAGS += -march=armv8.2-a+crypto+fp16+lse+rdm+rcpc+dotprod
+endif
+
+# ==============================================================================
+# 2. Smart Optimization Tier Switch (Safe for both Clang -Oz and GCC -Os)
+# ==============================================================================
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
-KBUILD_CFLAGS   += -Os
+    ifeq ($(cc-name),clang)
+        # Clang Size Mode: Optimize the kernel for size with -Os
+        KBUILD_CFLAGS += -Os
+        KBUILD_AFLAGS += -Os
+    else
+        # GCC Size Mode: Keep standard -Os
+        KBUILD_CFLAGS += -Os
+    endif
 else
-KBUILD_CFLAGS   += -O2
+    # High-Performance Mode: Uses -O3, loop unrolling, and MLGO intelligence
+    KBUILD_CFLAGS += -O3 -funroll-loops
+    KBUILD_AFLAGS += -O3 -funroll-loops
+
+    ifeq ($(cc-name),clang)
+        # 1. Hot-Cold Splitting: Maximizes instruction cache efficiency
+        KBUILD_CFLAGS += -mllvm -hot-cold-split=true
+
+        # 2. MLGO Register Allocation Advisor: Optimized mobile register spilling
+        KBUILD_CFLAGS += -mllvm -regalloc-enable-advisor=release
+        KBUILD_LDFLAGS += -mllvm -regalloc-enable-advisor=release
+
+        # 3. Machine Learning Guided Inlining: Balances binary size and execution speed
+        KBUILD_LDFLAGS += -mllvm -enable-ml-inliner=release
+    endif
 endif
 
 # Tell gcc to never replace conditional load with a non-conditional one
@@ -805,6 +852,23 @@ endif
 KBUILD_CFLAGS += $(stackp-flag)
 
 ifeq ($(cc-name),clang)
+ifdef CONFIG_POLLY_CLANG
+KBUILD_CFLAGS	+= -mllvm -polly \
+		   -mllvm -polly-ast-use-context \
+		   -mllvm -polly-invariant-load-hoisting \
+		   -mllvm -polly-run-inliner \
+		   -mllvm -polly-vectorizer=stripmine \
+		   -mllvm -polly-loopfusion-greedy=1 \
+		   -mllvm -polly-reschedule=1 \
+		   -mllvm -polly-postopts=1
+# Polly may optimise loops with dead paths beyound what the linker
+# can understand. This may negate the effect of the linker's DCE
+# so we tell Polly to perfom proven DCE on the loops it optimises
+# in order to preserve the overall effect of the linker's DCE.
+ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
+KBUILD_CFLAGS	+= -mllvm -polly-run-dce
+endif
+endif
 KBUILD_CFLAGS += $(call cc-disable-warning, format-invalid-specifier)
 KBUILD_CFLAGS += $(call cc-disable-warning, gnu)
 KBUILD_CFLAGS += $(call cc-disable-warning, duplicate-decl-specifier)
@@ -812,6 +876,8 @@ KBUILD_CFLAGS += $(call cc-option, -Wno-undefined-optimized)
 KBUILD_CFLAGS += $(call cc-option, -Wno-tautological-constant-out-of-range-compare)
 KBUILD_CFLAGS += $(call cc-option, -mllvm -disable-struct-const-merge)
 KBUILD_CFLAGS += $(call cc-option, -Wno-sometimes-uninitialized)
+KBUILD_CFLAGS += $(call cc-option, -Wno-pointer-to-int-cast)
+KBUILD_CFLAGS += $(call cc-option, -Wno-void-pointer-to-int-cast)
 
 # Quiet clang warning: comparison of unsigned expression < 0 is always false
 
@@ -820,7 +886,6 @@ KBUILD_CFLAGS += $(call cc-disable-warning, tautological-compare)
 # source of a reference will be _MergedGlobals and not on of the whitelisted names.
 # See modpost pattern 2
 KBUILD_CFLAGS += $(call cc-option, -mno-global-merge,)
-KBUILD_CFLAGS += $(call cc-option, -fcatch-undefined-behavior)
 endif
 
 KBUILD_CFLAGS += $(call cc-option,-fno-delete-null-pointer-checks,)
@@ -829,7 +894,7 @@ KBUILD_CFLAGS += $(call cc-option,-fno-delete-null-pointer-checks,)
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-but-set-variable)
 
 ifeq ($(ld-name),lld)
-LDFLAGS += -O2
+LDFLAGS += --lto-O3
 endif
 
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
@@ -928,12 +993,7 @@ else
 lto-clang-flags	:= -flto
 endif
 lto-clang-flags += -fvisibility=default $(call cc-option, -fsplit-lto-unit)
-
-# Limit inlining across translation units to reduce binary size
-LD_FLAGS_LTO_CLANG := -mllvm -import-instr-limit=5
-
-KBUILD_LDFLAGS += $(LD_FLAGS_LTO_CLANG)
-KBUILD_LDFLAGS_MODULE += $(LD_FLAGS_LTO_CLANG)
+lto-clang-flags += -fsplit-machine-functions
 
 KBUILD_LDFLAGS_MODULE += -T scripts/module-lto.lds
 
@@ -1015,20 +1075,8 @@ KBUILD_CFLAGS += $(call cc-disable-warning, maybe-uninitialized)
 # disable invalid "can't wrap" optimizations for signed / pointers
 KBUILD_CFLAGS	+= $(call cc-option,-fno-strict-overflow)
 
-# clang sets -fmerge-all-constants by default as optimization, but this
-# is non-conforming behavior for C and in fact breaks the kernel, so we
-# need to disable it here generally.
-KBUILD_CFLAGS	+= $(call cc-option,-fno-merge-all-constants)
-
-# for gcc -fno-merge-all-constants disables everything, but it is fine
-# to have actual conforming behavior enabled.
-KBUILD_CFLAGS	+= $(call cc-option,-fmerge-constants)
-
 # Make sure -fstack-check isn't enabled (like gentoo apparently did)
 KBUILD_CFLAGS  += $(call cc-option,-fno-stack-check,)
-
-# conserve stack if available
-KBUILD_CFLAGS   += $(call cc-option,-fconserve-stack)
 
 # disallow errors like 'EXPORT_GPL(foo);' with missing header
 KBUILD_CFLAGS   += $(call cc-option,-Werror=implicit-int)
