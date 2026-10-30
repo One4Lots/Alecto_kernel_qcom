@@ -626,54 +626,80 @@ config LD_DEAD_CODE_DATA_ELIMINATION
 	  is used to distinguish them from label names / C identifiers.
 
 config LTO
-	def_bool n
+	bool
+	help
+	  Selected if the kernel will be built using the compiler's LTO feature.
+
+config LTO_CLANG
+	bool
+	select LTO
+	help
+	  Selected if the kernel will be built using Clang's LTO feature.
 
 config ARCH_SUPPORTS_LTO_CLANG
 	bool
 	help
-	  An architecture should select this option it supports:
-	  - compiling with clang,
-	  - compiling inline assembly with clang's integrated assembler,
-	  - and linking with either lld or GNU gold w/ LLVMgold.
+	  An architecture should select this option if it supports:
+	  - compiling with Clang,
+	  - compiling inline assembly with Clang's integrated assembler,
+	  - and linking with either LLD or GNU gold w/ LLVMgold.
 
-config ARCH_SUPPORTS_THINLTO
+config ARCH_SUPPORTS_LTO_CLANG_THIN
 	bool
 	help
-	  An architecture should select this if it supports clang's ThinLTO.
+	  An architecture should select this option if it can support Clang's
+	  ThinLTO mode.
 
-config THINLTO
-	bool "Use clang ThinLTO (EXPERIMENTAL)"
-	depends on LTO_CLANG && ARCH_SUPPORTS_THINLTO
-	default y
-	help
-	  Use ThinLTO to speed up Link Time Optimization.
-
-choice
-	prompt "Link-Time Optimization (LTO) (EXPERIMENTAL)"
-	default LTO_NONE
-	help
-	  This option turns on Link-Time Optimization (LTO).
-
-config LTO_NONE
-	bool "None"
-
-config LTO_CLANG
-	bool "Use clang Link Time Optimization (LTO) (EXPERIMENTAL)"
+config HAS_LTO_CLANG
+	def_bool y
 	depends on ARCH_SUPPORTS_LTO_CLANG
 	depends on !FTRACE_MCOUNT_RECORD || HAVE_C_RECORDMCOUNT
 	depends on !KASAN
-	select LTO
+	help
+	  The compiler and Kconfig options support building with Clang's LTO.
+
+choice
+	prompt "Link Time Optimization (LTO) (EXPERIMENTAL)"
+	default LTO_CLANG_THIN
+	help
+	  This option enables Link Time Optimization (LTO), which allows the
+	  compiler to optimize binaries globally.
+
+	  If unsure, select LTO_NONE. Note that LTO is very resource-intensive.
+
+config LTO_NONE
+	bool "None"
+	help
+	  Build the kernel normally, without Link Time Optimization (LTO).
+
+config LTO_CLANG_FULL
+	bool "Clang Full LTO (EXPERIMENTAL)"
+	depends on HAS_LTO_CLANG
+	select LTO_CLANG
 	select THIN_ARCHIVES
 	help
-          This option enables clang's Link Time Optimization (LTO), which allows
-          the compiler to optimize the kernel globally at link time. If you
-          enable this option, the compiler generates LLVM IR instead of object
-          files, and the actual compilation from IR occurs at the LTO link step,
-          which may take several minutes.
+	  This option enables Clang's full Link Time Optimization (LTO), which
+	  allows the compiler to optimize the kernel globally. The compiler
+	  generates LLVM bitcode instead of ELF object files, and the actual
+	  compilation from bitcode happens at the LTO link step, which may take
+	  several minutes depending on the kernel configuration.
 
-          If you select this option, you must compile the kernel with clang >=
-          5.0 (make CC=clang) and GNU gold from binutils >= 2.27, and have the
-          LLVMgold plug-in in LD_LIBRARY_PATH.
+	  During link time, this option can use a large amount of RAM, and may
+	  take much longer than the ThinLTO option.
+
+config LTO_CLANG_THIN
+	bool "Clang ThinLTO (EXPERIMENTAL)"
+	depends on HAS_LTO_CLANG && ARCH_SUPPORTS_LTO_CLANG_THIN
+	select LTO_CLANG
+	select THIN_ARCHIVES
+	help
+	  This option enables Clang's ThinLTO, which allows for parallel
+	  optimization and faster incremental compiles compared to full LTO.
+	  More information can be found in Clang's documentation:
+
+	    https://clang.llvm.org/docs/ThinLTO.html
+
+	  If unsure, say Y.
 
 endchoice
 
